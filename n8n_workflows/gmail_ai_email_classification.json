@@ -1,0 +1,237 @@
+{
+  "name": "Gmail AI - Email Classification Workflow",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "gmail-ai-webhook",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Gmail AI Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [240, 300],
+      "webhookId": "gmail-ai-email-classification"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{$json.data.classification.category}}",
+              "operation": "equal",
+              "value2": "work"
+            }
+          ]
+        }
+      },
+      "id": "work-email-check",
+      "name": "Work Email?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{$json.data.classification.priority}}",
+              "operation": "equal",
+              "value2": "high"
+            }
+          ]
+        }
+      },
+      "id": "high-priority-check",
+      "name": "High Priority?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [680, 200]
+    },
+    {
+      "parameters": {
+        "channel": "#urgent-emails",
+        "text": "🚨 HIGH PRIORITY EMAIL ALERT\n\n**Subject:** {{$json.data.email_data.subject}}\n**From:** {{$json.data.email_data.sender}}\n**Category:** {{$json.data.classification.category}}\n**Actions Needed:** {{$json.data.classification.suggested_actions.join(', ')}}\n\n**Reasoning:** {{$json.data.classification.reasoning}}",
+        "username": "Gmail AI Bot"
+      },
+      "id": "slack-urgent",
+      "name": "Slack Urgent Alert",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 1,
+      "position": [900, 100]
+    },
+    {
+      "parameters": {
+        "channel": "#work-emails",
+        "text": "📧 New Work Email\n\n**Subject:** {{$json.data.email_data.subject}}\n**From:** {{$json.data.email_data.sender}}\n**Priority:** {{$json.data.classification.priority}}\n**Category:** {{$json.data.classification.category}}",
+        "username": "Gmail AI Bot"
+      },
+      "id": "slack-work",
+      "name": "Slack Work Channel",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 1,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{$json.data.classification.category}}",
+              "operation": "equal",
+              "value2": "newsletters"
+            }
+          ]
+        }
+      },
+      "id": "newsletter-check",
+      "name": "Newsletter?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [680, 500]
+    },
+    {
+      "parameters": {
+        "url": "http://localhost:8000/api/smart-actions",
+        "requestMethod": "POST",
+        "jsonParameters": true,
+        "options": {},
+        "bodyParametersJson": "{\n  \"email_ids\": [\"{{$json.data.email_data.email_id}}\"],\n  \"dry_run\": false,\n  \"max_emails\": 1\n}"
+      },
+      "id": "auto-archive",
+      "name": "Auto Archive Newsletter",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 2,
+      "position": [900, 500]
+    },
+    {
+      "parameters": {
+        "values": {
+          "string": [
+            {
+              "name": "status",
+              "value": "processed"
+            },
+            {
+              "name": "classification",
+              "value": "={{$json.data.classification.category}}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "response-node",
+      "name": "Webhook Response",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 1,
+      "position": [1120, 300]
+    }
+  ],
+  "connections": {
+    "Gmail AI Webhook": {
+      "main": [
+        [
+          {
+            "node": "Work Email?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Work Email?": {
+      "main": [
+        [
+          {
+            "node": "High Priority?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Newsletter?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "High Priority?": {
+      "main": [
+        [
+          {
+            "node": "Slack Urgent Alert",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Slack Work Channel",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Newsletter?": {
+      "main": [
+        [
+          {
+            "node": "Auto Archive Newsletter",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Slack Urgent Alert": {
+      "main": [
+        [
+          {
+            "node": "Webhook Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Slack Work Channel": {
+      "main": [
+        [
+          {
+            "node": "Webhook Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Auto Archive Newsletter": {
+      "main": [
+        [
+          {
+            "node": "Webhook Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "createdAt": "2025-07-24T21:00:00.000Z",
+  "id": "gmail-ai-classification",
+  "meta": {
+    "instanceId": "gmail-ai-suite"
+  },
+  "staticData": {},
+  "tags": ["gmail", "ai", "automation"],
+  "triggerCount": 0,
+  "updatedAt": "2025-07-24T21:00:00.000Z",
+  "versionId": "1"
+}

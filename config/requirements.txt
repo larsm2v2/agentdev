@@ -1,0 +1,70 @@
+# Core AI Agent Frameworks
+crewai>=0.28.0
+langchain>=0.1.0
+langchain-community>=0.0.20
+langchain-openai>=0.0.8
+langchain-anthropic>=0.1.0
+
+# Gmail AI Suite - Google APIs
+google-auth>=2.23.0
+google-auth-oauthlib>=1.1.0
+google-auth-httplib2>=0.1.1
+google-api-python-client>=2.100.0
+
+# LLM Providers
+openai>=1.12.0
+anthropic>=0.18.0
+google-generativeai>=0.3.0
+
+# Vector Database
+qdrant-client>=1.7.0
+
+# Observability
+langfuse>=2.21.0
+
+# Environment and Configuration
+python-dotenv>=1.0.0
+
+# Data Processing
+pandas>=2.2.0
+numpy>=1.24.0
+
+# Web and API
+requests>=2.31.0
+httpx>=0.27.0
+
+# Async Support
+asyncio
+aiohttp>=3.9.0
+
+# Document Processing
+pypdf>=4.0.0
+python-docx>=1.1.0
+beautifulsoup4>=4.12.0
+lxml>=4.9.0
+
+# Gmail AI - Optional Dependencies
+email-reply-parser>=0.5.12
+
+# Text Processing
+tiktoken>=0.6.0
+spacy>=3.7.0
+
+# Database
+psycopg2-binary>=2.9.0
+sqlalchemy>=2.0.0
+
+# Utilities
+pydantic>=2.6.0
+typing-extensions>=4.9.0
+rich>=13.7.0
+python-dateutil>=2.8.2
+
+# Testing (optional)
+pytest>=8.0.0
+pytest-asyncio>=0.23.0
+
+# Development tools (optional)
+black>=24.0.0
+flake8>=7.0.0
+mypy>=1.8.0

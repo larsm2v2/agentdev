@@ -1,0 +1,543 @@
+{
+  "name": "Gmail AI - Auto Email Labeling with LLM",
+  "nodes": [
+    {
+      "id": "schedule-trigger",
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "position": [240, 300],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "value": 1
+            }
+          ]
+        }
+      },
+      "typeVersion": 1.2
+    },
+    {
+      "id": "config-node",
+      "name": "Config",
+      "type": "n8n-nodes-base.set",
+      "position": [460, 300],
+      "parameters": {
+        "options": {},
+        "assignments": {
+          "assignments": [
+            {
+              "id": "gmail-ai-server",
+              "name": "gmail_ai_server",
+              "type": "string",
+              "value": "http://localhost:8000"
+            },
+            {
+              "id": "max-emails",
+              "name": "max_emails",
+              "type": "number",
+              "value": 50
+            },
+            {
+              "id": "extra-filter",
+              "name": "extra_filter",
+              "type": "string",
+              "value": "has:nouserlabels"
+            },
+            {
+              "id": "categories-config",
+              "name": "categories",
+              "type": "string",
+              "value": "[\n  {\"name\": \"Work\", \"description\": \"Professional emails, meetings, work projects\"},\n  {\"name\": \"Personal\", \"description\": \"Personal communications, family, friends\"},\n  {\"name\": \"Shopping\", \"description\": \"Online purchases, receipts, shipping notifications\"},\n  {\"name\": \"Finance\", \"description\": \"Banking, investments, bills, financial statements\"},\n  {\"name\": \"Newsletter\", \"description\": \"Newsletters, subscriptions, marketing emails\"},\n  {\"name\": \"Support\", \"description\": \"Customer support, technical help, service requests\"},\n  {\"name\": \"Travel\", \"description\": \"Flight confirmations, hotel bookings, travel itineraries\"},\n  {\"name\": \"Health\", \"description\": \"Medical appointments, health records, insurance\"},\n  {\"name\": \"Education\", \"description\": \"Course materials, academic communications, learning\"},\n  {\"name\": \"Social\", \"description\": \"Social media notifications, event invitations\"}\n]"
+            }
+          ]
+        }
+      },
+      "typeVersion": 3.4
+    },
+    {
+      "id": "get-unlabeled-emails",
+      "name": "Get Unlabeled Emails",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [680, 300],
+      "parameters": {
+        "url": "={{$json.gmail_ai_server}}/api/email-analytics",
+        "requestMethod": "GET",
+        "options": {
+          "queryParameters": {
+            "days_back": 1,
+            "include_unlabeled": true,
+            "max_results": "={{$json.max_emails}}"
+          }
+        }
+      },
+      "typeVersion": 2
+    },
+    {
+      "id": "get-email-details",
+      "name": "Get Email Details",
+      "type": "n8n-nodes-base.gmail",
+      "position": [900, 300],
+      "parameters": {
+        "limit": "={{$('Config').item.json.max_emails}}",
+        "simple": false,
+        "filters": {
+          "q": "={{$('Config').item.json.extra_filter}}"
+        },
+        "options": {},
+        "operation": "getAll"
+      },
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "your-gmail-oauth-id",
+          "name": "Gmail Account"
+        }
+      },
+      "executeOnce": true,
+      "typeVersion": 2.1
+    },
+    {
+      "id": "classify-with-llm",
+      "name": "Classify Email with LLM",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [1120, 300],
+      "parameters": {
+        "url": "={{$('Config').item.json.gmail_ai_server}}/api/classify-email",
+        "requestMethod": "POST",
+        "jsonParameters": true,
+        "options": {},
+        "bodyParametersJson": "{\n  \"subject\": \"{{$json.headers.subject}}\",\n  \"sender\": \"{{$json.headers.from}}\",\n  \"body\": \"{{$json.text}}\",\n  \"date\": \"{{$json.headers.date}}\",\n  \"categories\": {{JSON.stringify(JSON.parse($('Config').item.json.categories))}}\n}"
+      },
+      "typeVersion": 2
+    },
+    {
+      "id": "parse-classification",
+      "name": "Parse Classification",
+      "type": "n8n-nodes-base.set",
+      "position": [1340, 300],
+      "parameters": {
+        "options": {},
+        "assignments": {
+          "assignments": [
+            {
+              "id": "thread-id",
+              "name": "threadId",
+              "type": "string",
+              "value": "={{$('Get Email Details').item.json.threadId}}"
+            },
+            {
+              "id": "label-name",
+              "name": "labelName",
+              "type": "string",
+              "value": "={{$json.category}}"
+            },
+            {
+              "id": "confidence",
+              "name": "confidence",
+              "type": "number",
+              "value": "={{$json.confidence}}"
+            },
+            {
+              "id": "priority",
+              "name": "priority",
+              "type": "string",
+              "value": "={{$json.priority}}"
+            }
+          ]
+        }
+      },
+      "typeVersion": 3.4
+    },
+    {
+      "id": "confidence-filter",
+      "name": "High Confidence Filter",
+      "type": "n8n-nodes-base.filter",
+      "position": [1560, 300],
+      "parameters": {
+        "options": {},
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "confidence-check",
+              "operator": {
+                "name": "filter.operator.largerEqual",
+                "type": "number",
+                "operation": "largerEqual"
+              },
+              "leftValue": "={{$json.confidence}}",
+              "rightValue": 0.7
+            }
+          ]
+        }
+      },
+      "typeVersion": 2.2
+    },
+    {
+      "id": "create-label-if-needed",
+      "name": "Create Label if Needed",
+      "type": "n8n-nodes-base.gmail",
+      "onError": "continueRegularOutput",
+      "position": [1780, 300],
+      "parameters": {
+        "name": "={{$json.labelName}}",
+        "options": {},
+        "resource": "label",
+        "operation": "create"
+      },
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "your-gmail-oauth-id",
+          "name": "Gmail Account"
+        }
+      },
+      "typeVersion": 2.1
+    },
+    {
+      "id": "get-existing-labels",
+      "name": "Get Existing Labels",
+      "type": "n8n-nodes-base.gmail",
+      "position": [2000, 300],
+      "parameters": {
+        "resource": "label",
+        "returnAll": true
+      },
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "your-gmail-oauth-id",
+          "name": "Gmail Account"
+        }
+      },
+      "typeVersion": 2.1
+    },
+    {
+      "id": "find-label-id",
+      "name": "Find Label ID",
+      "type": "n8n-nodes-base.filter",
+      "position": [2220, 300],
+      "parameters": {
+        "options": {},
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "label-match",
+              "operator": {
+                "name": "filter.operator.equals",
+                "type": "string",
+                "operation": "equals"
+              },
+              "leftValue": "={{$json.name}}",
+              "rightValue": "={{$('Parse Classification').item.json.labelName}}"
+            }
+          ]
+        }
+      },
+      "typeVersion": 2.2
+    },
+    {
+      "id": "apply-label",
+      "name": "Apply Label to Email",
+      "type": "n8n-nodes-base.gmail",
+      "position": [2440, 300],
+      "parameters": {
+        "labelIds": "={{$json.id}}",
+        "resource": "thread",
+        "threadId": "={{$('Parse Classification').item.json.threadId}}",
+        "operation": "addLabels"
+      },
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "your-gmail-oauth-id",
+          "name": "Gmail Account"
+        }
+      },
+      "typeVersion": 2.1
+    },
+    {
+      "id": "priority-check",
+      "name": "High Priority Check",
+      "type": "n8n-nodes-base.filter",
+      "position": [2660, 300],
+      "parameters": {
+        "options": {},
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "priority-high",
+              "operator": {
+                "name": "filter.operator.equals",
+                "type": "string",
+                "operation": "equals"
+              },
+              "leftValue": "={{$('Parse Classification').item.json.priority}}",
+              "rightValue": "high"
+            }
+          ]
+        }
+      },
+      "typeVersion": 2.2
+    },
+    {
+      "id": "priority-notification",
+      "name": "High Priority Notification",
+      "type": "n8n-nodes-base.slack",
+      "position": [2880, 200],
+      "parameters": {
+        "channel": "#email-alerts",
+        "text": "🚨 **High Priority Email Detected**\n\n**Subject:** {{$('Get Email Details').item.json.headers.subject}}\n**From:** {{$('Get Email Details').item.json.headers.from}}\n**Category:** {{$('Parse Classification').item.json.labelName}}\n**Confidence:** {{Math.round($('Parse Classification').item.json.confidence * 100)}}%\n\n**Action:** Auto-labeled and flagged for immediate attention\n\n*Automated by Gmail AI Suite*",
+        "username": "Gmail AI Bot"
+      },
+      "credentials": {
+        "slackApi": {
+          "id": "your-slack-credentials",
+          "name": "Slack API"
+        }
+      },
+      "typeVersion": 1
+    },
+    {
+      "id": "log-classification",
+      "name": "Log Classification",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [2660, 500],
+      "parameters": {
+        "url": "={{$('Config').item.json.gmail_ai_server}}/api/log-classification",
+        "requestMethod": "POST",
+        "jsonParameters": true,
+        "options": {},
+        "bodyParametersJson": "{\n  \"thread_id\": \"{{$('Parse Classification').item.json.threadId}}\",\n  \"category\": \"{{$('Parse Classification').item.json.labelName}}\",\n  \"confidence\": {{$('Parse Classification').item.json.confidence}},\n  \"priority\": \"{{$('Parse Classification').item.json.priority}}\",\n  \"timestamp\": \"{{new Date().toISOString()}}\",\n  \"processed_by\": \"n8n_auto_labeling\"\n}"
+      },
+      "typeVersion": 2
+    },
+    {
+      "id": "batch-summary",
+      "name": "Batch Summary",
+      "type": "n8n-nodes-base.aggregator",
+      "position": [2880, 500],
+      "parameters": {
+        "fieldsToAggregate": {
+          "fieldToAggregate": [
+            {
+              "fieldToAggregate": "labelName",
+              "renameField": false,
+              "operation": "countUnique"
+            },
+            {
+              "fieldToAggregate": "confidence",
+              "renameField": false,
+              "operation": "average"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "typeVersion": 1
+    },
+    {
+      "id": "completion-webhook",
+      "name": "Send Completion Webhook",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [3100, 500],
+      "parameters": {
+        "url": "={{$('Config').item.json.gmail_ai_server}}/webhooks/labeling-completed",
+        "requestMethod": "POST",
+        "jsonParameters": true,
+        "options": {},
+        "bodyParametersJson": "{\n  \"event\": \"auto_labeling_completed\",\n  \"timestamp\": \"{{new Date().toISOString()}}\",\n  \"summary\": {\n    \"total_processed\": {{$json.total_count}},\n    \"categories_applied\": {{$json.labelName_countUnique}},\n    \"average_confidence\": {{Math.round($json.confidence_average * 100) / 100}},\n    \"processing_duration\": \"{{Date.now() - $('Schedule Trigger').item.json.timestamp}}ms\"\n  }\n}"
+      },
+      "typeVersion": 2
+    }
+  ],
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config": {
+      "main": [
+        [
+          {
+            "node": "Get Unlabeled Emails",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Unlabeled Emails": {
+      "main": [
+        [
+          {
+            "node": "Get Email Details",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Email Details": {
+      "main": [
+        [
+          {
+            "node": "Classify Email with LLM",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Classify Email with LLM": {
+      "main": [
+        [
+          {
+            "node": "Parse Classification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Classification": {
+      "main": [
+        [
+          {
+            "node": "High Confidence Filter",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "High Confidence Filter": {
+      "main": [
+        [
+          {
+            "node": "Create Label if Needed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Label if Needed": {
+      "main": [
+        [
+          {
+            "node": "Get Existing Labels",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Existing Labels": {
+      "main": [
+        [
+          {
+            "node": "Find Label ID",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find Label ID": {
+      "main": [
+        [
+          {
+            "node": "Apply Label to Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Apply Label to Email": {
+      "main": [
+        [
+          {
+            "node": "High Priority Check",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Log Classification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "High Priority Check": {
+      "main": [
+        [
+          {
+            "node": "High Priority Notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Classification": {
+      "main": [
+        [
+          {
+            "node": "Batch Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Batch Summary": {
+      "main": [
+        [
+          {
+            "node": "Send Completion Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "createdAt": "2025-07-25T21:00:00.000Z",
+  "id": "gmail-ai-auto-labeling",
+  "meta": {
+    "instanceId": "gmail-ai-suite"
+  },
+  "staticData": {},
+  "tags": ["gmail", "ai", "labeling", "automation"],
+  "triggerCount": 0,
+  "updatedAt": "2025-07-25T21:00:00.000Z",
+  "versionId": "1"
+}

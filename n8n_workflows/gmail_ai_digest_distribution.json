@@ -1,0 +1,234 @@
+{
+  "name": "Gmail AI - Daily Digest Distribution",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "value": "0 9 * * *"
+            }
+          ]
+        }
+      },
+      "id": "schedule-trigger",
+      "name": "Daily 9AM Trigger",
+      "type": "n8n-nodes-base.cron",
+      "typeVersion": 1,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "url": "http://localhost:8000/api/generate-digest",
+        "requestMethod": "POST",
+        "jsonParameters": true,
+        "options": {},
+        "bodyParametersJson": "{\n  \"days_back\": 1,\n  \"max_emails\": 100,\n  \"include_html\": true\n}"
+      },
+      "id": "generate-digest",
+      "name": "Generate Daily Digest",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 2,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "amount": 30,
+        "unit": "seconds"
+      },
+      "id": "wait-for-digest",
+      "name": "Wait for Digest",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "url": "http://localhost:8000/api/email-analytics",
+        "requestMethod": "GET",
+        "options": {}
+      },
+      "id": "get-analytics",
+      "name": "Get Analytics",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 2,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "channel": "#daily-digest",
+        "text": "📊 **Daily Gmail AI Digest Summary**\n\n**📧 Email Stats:**\n• Total emails: {{$json.total_emails}}\n• Categories: {{Object.keys($json.categories).length}}\n• High priority: {{$json.priorities.high}}\n\n**📁 Top Categories:**\n{{Object.entries($json.categories).slice(0,3).map(([cat, count]) => `• ${cat}: ${count} emails`).join('\\n')}}\n\n**🔗 Actions:**\n• [View Full Digest](http://localhost:8000/digest/latest)\n• [Gmail AI Dashboard](http://localhost:8000)",
+        "username": "Gmail AI Digest Bot",
+        "attachments": [
+          {
+            "color": "#4285f4",
+            "title": "Daily Email Summary",
+            "fields": [
+              {
+                "title": "Period",
+                "value": "Last 24 hours",
+                "short": true
+              },
+              {
+                "title": "Processing Time",
+                "value": "{{new Date().toLocaleString()}}",
+                "short": true
+              }
+            ]
+          }
+        ]
+      },
+      "id": "slack-digest",
+      "name": "Send Slack Summary",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 1,
+      "position": [1120, 200]
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "select": "channel",
+        "channelId": "general",
+        "messageText": "📧 **Gmail AI Daily Digest**\n\n**Summary:** {{$json.total_emails}} emails processed in the last 24 hours\n\n**Categories:** {{Object.keys($json.categories).join(', ')}}\n\n**Priority Breakdown:**\n- High: {{$json.priorities.high}}\n- Medium: {{$json.priorities.medium}}\n- Low: {{$json.priorities.low}}\n\n*Automated by Gmail AI Suite*"
+      },
+      "id": "teams-digest",
+      "name": "Send Teams Summary",
+      "type": "n8n-nodes-base.microsoftTeams",
+      "typeVersion": 1,
+      "position": [1120, 400]
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "requestMethod": "POST",
+        "url": "https://api.notion.com/v1/pages",
+        "jsonParameters": true,
+        "options": {},
+        "bodyParametersJson": "{\n  \"parent\": {\n    \"database_id\": \"your-database-id\"\n  },\n  \"properties\": {\n    \"Date\": {\n      \"date\": {\n        \"start\": \"{{new Date().toISOString().split('T')[0]}}\"\n      }\n    },\n    \"Total Emails\": {\n      \"number\": {{$json.total_emails}}\n    },\n    \"High Priority\": {\n      \"number\": {{$json.priorities.high}}\n    },\n    \"Categories\": {\n      \"multi_select\": [\n        {{Object.keys($json.categories).map(cat => `{\"name\": \"${cat}\"}`).join(',')}}\n      ]\n    }\n  }\n}",
+        "headers": {
+          "Notion-Version": "2022-06-28",
+          "Content-Type": "application/json"
+        }
+      },
+      "id": "notion-log",
+      "name": "Log to Notion",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 2,
+      "position": [1120, 600]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "={{$json.priorities.high}}",
+              "operation": "larger",
+              "value2": 5
+            }
+          ]
+        }
+      },
+      "id": "high-priority-check",
+      "name": "Many High Priority?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1340, 300]
+    },
+    {
+      "parameters": {
+        "channel": "#alerts",
+        "text": "⚠️ **HIGH PRIORITY EMAIL ALERT**\n\n**{{$json.priorities.high}} high-priority emails** detected in today's digest!\n\nThis is above the normal threshold. Please review:\n• Check for urgent client communications\n• Review system alerts\n• Consider priority email processing\n\n*This is an automated alert from Gmail AI Suite*",
+        "username": "Gmail AI Alert Bot"
+      },
+      "id": "priority-alert",
+      "name": "High Priority Alert",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 1,
+      "position": [1560, 200]
+    }
+  ],
+  "connections": {
+    "Daily 9AM Trigger": {
+      "main": [
+        [
+          {
+            "node": "Generate Daily Digest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Daily Digest": {
+      "main": [
+        [
+          {
+            "node": "Wait for Digest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait for Digest": {
+      "main": [
+        [
+          {
+            "node": "Get Analytics",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Analytics": {
+      "main": [
+        [
+          {
+            "node": "Send Slack Summary",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Send Teams Summary",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Log to Notion",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Many High Priority?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Many High Priority?": {
+      "main": [
+        [
+          {
+            "node": "High Priority Alert",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    }
+  },
+  "createdAt": "2025-07-24T21:00:00.000Z",
+  "id": "gmail-ai-digest-distribution",
+  "meta": {
+    "instanceId": "gmail-ai-suite"
+  },
+  "staticData": {},
+  "tags": ["gmail", "ai", "digest", "daily"],
+  "triggerCount": 0,
+  "updatedAt": "2025-07-24T21:00:00.000Z",
+  "versionId": "1"
+}

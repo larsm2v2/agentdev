@@ -1,0 +1,7 @@
+{
+  "digest_days": 1,
+  "digest_max_emails": 50,
+  "actions_max_emails": 20,
+  "dry_run_default": true,
+  "auto_refresh": false
+}

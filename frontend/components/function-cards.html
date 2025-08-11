@@ -1,0 +1,270 @@
+<!-- Main Functions Panel -->
+<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+  <!-- Shelving Function -->
+  <div
+    class="function-card shelving bg-white rounded-lg shadow-md p-6 cursor-pointer hover:shadow-lg transition-all duration-200 hover:scale-105 relative"
+    :class="{ 'active': functions.shelving.enabled, 'ring-2 ring-blue-500': showTab === 'shelving' }"
+    @click="showTab = 'shelving'"
+    x-data="{ hovering: false }"
+    @mouseenter="hovering = true"
+    @mouseleave="hovering = false"
+  >
+    <div class="flex justify-between items-start mb-4">
+      <div class="flex items-center">
+        <i class="fas fa-inbox text-3xl text-blue-500 mr-3"></i>
+        <div>
+          <h3 class="text-xl font-bold text-gray-800">Shelving</h3>
+          <p class="text-sm text-gray-600">Realtime Organization</p>
+        </div>
+      </div>
+      <label class="toggle-switch" @click.stop>
+        <input
+          type="checkbox"
+          x-model="functions.shelving.enabled"
+          @change="toggleFunction('shelving')"
+        />
+        <span class="slider"></span>
+      </label>
+    </div>
+
+    <div class="space-y-2">
+      <div class="flex justify-between text-sm">
+        <span class="text-gray-600">Status:</span>
+        <span
+          :class="functions.shelving.enabled ? 'text-green-600' : 'text-red-600'"
+          x-text="functions.shelving.enabled ? 'Active' : 'Inactive'"
+        ></span>
+      </div>
+      <div class="flex justify-between text-sm">
+        <span class="text-gray-600">Processed Today:</span>
+        <span
+          class="font-semibold"
+          x-text="functions.shelving.processedToday"
+        ></span>
+      </div>
+      <div class="flex justify-between text-sm">
+        <span class="text-gray-600">Average Speed:</span>
+        <span
+          class="font-semibold"
+          x-text="functions.shelving.avgSpeed + '/min'"
+        ></span>
+      </div>
+    </div>
+
+    <!-- Hover tooltip -->
+    <div
+      x-show="hovering"
+      x-transition:enter="transition ease-out duration-200"
+      x-transition:enter-start="opacity-0"
+      x-transition:enter-end="opacity-100"
+      x-transition:leave="transition ease-in duration-150"
+      x-transition:leave-start="opacity-100"
+      x-transition:leave-end="opacity-0"
+      class="absolute -bottom-2 left-0 right-0 bg-gray-800 text-white text-sm p-3 rounded-lg shadow-lg z-10 mx-2"
+    >
+      Automatically parse and organize incoming emails as they arrive. Perfect
+      for maintaining a clean, organized inbox in real-time.
+    </div>
+  </div>
+
+  <!-- Cataloging Function -->
+  <div
+    class="function-card cataloging bg-white rounded-lg shadow-md p-6 cursor-pointer hover:shadow-lg transition-all duration-200 hover:scale-105 relative"
+    :class="{ 'active': functions.cataloging.enabled, 'ring-2 ring-green-500': showTab === 'cataloging' }"
+    @click="showTab = 'cataloging'"
+    x-data="{ hovering: false }"
+    @mouseenter="hovering = true"
+    @mouseleave="hovering = false"
+  >
+    <div class="flex justify-between items-start mb-4">
+      <div class="flex items-center">
+        <i class="fas fa-archive text-3xl text-green-500 mr-3"></i>
+        <div>
+          <h3 class="text-xl font-bold text-gray-800">Cataloging</h3>
+          <p class="text-sm text-gray-600">Email Library Organization</p>
+        </div>
+      </div>
+      <label class="toggle-switch" @click.stop>
+        <input
+          type="checkbox"
+          x-model="functions.cataloging.enabled"
+          @change="toggleFunction('cataloging')"
+        />
+        <span class="slider"></span>
+      </label>
+    </div>
+
+    <div class="space-y-2">
+      <div class="flex justify-between text-sm">
+        <span class="text-gray-600">Status:</span>
+        <span
+          :class="functions.cataloging.enabled ? 'text-green-600' : 'text-red-600'"
+          x-text="functions.cataloging.enabled ? 'Active' : 'Inactive'"
+        ></span>
+      </div>
+      <div class="flex justify-between text-sm">
+        <span class="text-gray-600">Historical Emails:</span>
+        <span
+          class="font-semibold"
+          x-text="functions.cataloging.historicalCount"
+        ></span>
+      </div>
+      <div class="flex justify-between text-sm">
+        <span class="text-gray-600">Processing Rate:</span>
+        <span
+          class="font-semibold"
+          x-text="functions.cataloging.processingRate + '/hour'"
+        ></span>
+      </div>
+    </div>
+
+    <!-- Hover tooltip -->
+    <div
+      x-show="hovering"
+      x-transition:enter="transition ease-out duration-200"
+      x-transition:enter-start="opacity-0"
+      x-transition:enter-end="opacity-100"
+      x-transition:leave="transition ease-in duration-150"
+      x-transition:leave-start="opacity-100"
+      x-transition:leave-end="opacity-0"
+      class="absolute -bottom-2 left-0 right-0 bg-gray-800 text-white text-sm p-3 rounded-lg shadow-lg z-10 mx-2"
+    >
+      Process and organize historical emails (older than 1 day). Build your
+      comprehensive email library with AI-powered categorization.
+    </div>
+  </div>
+
+  <!-- Reclassification Function -->
+  <div
+    class="function-card reclassification bg-white rounded-lg shadow-md p-6 cursor-pointer hover:shadow-lg transition-all duration-200 hover:scale-105 relative"
+    :class="{ 'active': functions.reclassification.enabled, 'ring-2 ring-purple-500': showTab === 'reclassification' }"
+    @click="showTab = 'reclassification'"
+    x-data="{ hovering: false }"
+    @mouseenter="hovering = true"
+    @mouseleave="hovering = false"
+  >
+    <div class="flex justify-between items-start mb-4">
+      <div class="flex items-center">
+        <i class="fas fa-tags text-3xl text-purple-500 mr-3"></i>
+        <div>
+          <h3 class="text-xl font-bold text-gray-800">Reclassification</h3>
+          <p class="text-sm text-gray-600">Email Specific Label Changes</p>
+        </div>
+      </div>
+      <label class="toggle-switch" @click.stop>
+        <input
+          type="checkbox"
+          x-model="functions.reclassification.enabled"
+          @change="toggleFunction('reclassification')"
+        />
+        <span class="slider"></span>
+      </label>
+    </div>
+
+    <div class="space-y-2">
+      <div class="flex justify-between text-sm">
+        <span class="text-gray-600">Status:</span>
+        <span
+          :class="functions.reclassification.enabled ? 'text-green-600' : 'text-red-600'"
+          x-text="functions.reclassification.enabled ? 'Active' : 'Inactive'"
+        ></span>
+      </div>
+      <div class="flex justify-between text-sm">
+        <span class="text-gray-600">Labels Monitored:</span>
+        <span
+          class="font-semibold"
+          x-text="functions.reclassification.labelsCount"
+        ></span>
+      </div>
+      <div class="flex justify-between text-sm">
+        <span class="text-gray-600">Reclassified:</span>
+        <span
+          class="font-semibold"
+          x-text="functions.reclassification.reclassifiedCount"
+        ></span>
+      </div>
+    </div>
+
+    <!-- Hover tooltip -->
+    <div
+      x-show="hovering"
+      x-transition:enter="transition ease-out duration-200"
+      x-transition:enter-start="opacity-0"
+      x-transition:enter-end="opacity-100"
+      x-transition:leave="transition ease-in duration-150"
+      x-transition:leave-start="opacity-100"
+      x-transition:leave-end="opacity-0"
+      class="absolute -bottom-2 left-0 right-0 bg-gray-800 text-white text-sm p-3 rounded-lg shadow-lg z-10 mx-2"
+    >
+      Reorganize groups of emails based on existing labels. Perfect for refining
+      categories and improving organization accuracy.
+    </div>
+  </div>
+
+  <!-- Workflows Function -->
+  <div
+    class="function-card workflows bg-white rounded-lg shadow-md p-6 cursor-pointer hover:shadow-lg transition-all duration-200 hover:scale-105 relative"
+    :class="{ 'active': functions.workflows.enabled, 'ring-2 ring-orange-500': showTab === 'workflows' }"
+    @click="showTab = 'workflows'"
+    x-data="{ hovering: false }"
+    @mouseenter="hovering = true"
+    @mouseleave="hovering = false"
+  >
+    <div class="flex justify-between items-start mb-4">
+      <div class="flex items-center">
+        <i class="fas fa-project-diagram text-3xl text-orange-500 mr-3"></i>
+        <div>
+          <h3 class="text-xl font-bold text-gray-800">Workflows</h3>
+          <p class="text-sm text-gray-600">n8n Integration & Automation</p>
+        </div>
+      </div>
+      <label class="toggle-switch" @click.stop>
+        <input
+          type="checkbox"
+          x-model="functions.workflows.enabled"
+          @change="toggleFunction('workflows')"
+        />
+        <span class="slider"></span>
+      </label>
+    </div>
+
+    <div class="space-y-2">
+      <div class="flex justify-between text-sm">
+        <span class="text-gray-600">Status:</span>
+        <span
+          :class="functions.workflows.enabled ? 'text-green-600' : 'text-red-600'"
+          x-text="functions.workflows.enabled ? 'Active' : 'Inactive'"
+        ></span>
+      </div>
+      <div class="flex justify-between text-sm">
+        <span class="text-gray-600">Active Workflows:</span>
+        <span
+          class="font-semibold"
+          x-text="functions.workflows.activeCount"
+        ></span>
+      </div>
+      <div class="flex justify-between text-sm">
+        <span class="text-gray-600">Executions Today:</span>
+        <span
+          class="font-semibold"
+          x-text="functions.workflows.executionsToday"
+        ></span>
+      </div>
+    </div>
+
+    <!-- Hover tooltip -->
+    <div
+      x-show="hovering"
+      x-transition:enter="transition ease-out duration-200"
+      x-transition:enter-start="opacity-0"
+      x-transition:enter-end="opacity-100"
+      x-transition:leave="transition ease-in duration-150"
+      x-transition:leave-start="opacity-100"
+      x-transition:leave-end="opacity-0"
+      class="absolute -bottom-2 left-0 right-0 bg-gray-800 text-white text-sm p-3 rounded-lg shadow-lg z-10 mx-2"
+    >
+      Manage and execute automated workflows using n8n integration. Create
+      custom email processing pipelines and trigger automated actions.
+    </div>
+  </div>
+</div>

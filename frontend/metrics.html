@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Performance Metrics - Email Librarian</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link
+      href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css"
+      rel="stylesheet"
+    />
+    <style>
+      .metric-card {
+        transition: all 0.3s ease;
+      }
+      .metric-card:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1);
+      }
+      .status-indicator {
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+        display: inline-block;
+        margin-right: 8px;
+      }
+      .status-healthy {
+        background-color: #10b981;
+      }
+      .status-warning {
+        background-color: #f59e0b;
+      }
+      .status-error {
+        background-color: #ef4444;
+      }
+      .chart-container {
+        position: relative;
+        height: 300px;
+      }
+      .connection-status {
+        position: fixed;
+        top: 20px;
+        right: 20px;
+        z-index: 1000;
+        padding: 8px 16px;
+        border-radius: 8px;
+        color: white;
+        font-weight: 500;
+      }
+      .connected {
+        background-color: #10b981;
+      }
+      .disconnected {
+        background-color: #ef4444;
+      }
+      .connecting {
+        background-color: #f59e0b;
+      }
+    </style>
+  </head>
+  <body class="bg-gray-100 min-h-screen">
+    <!-- Connection Status Indicator -->
+    <div id="connection-status" class="connection-status connecting">
+      <i class="fas fa-circle animate-pulse"></i> Connecting...
+    </div>
+
+    <!-- Header -->
+    <header class="bg-white shadow-sm border-b border-gray-200">
+      <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div class="flex justify-between items-center py-6">
+          <div class="flex items-center">
+            <a href="/" class="text-blue-600 hover:text-blue-700 mr-4">
+              <i class="fas fa-arrow-left text-lg"></i>
+            </a>
+            <i class="fas fa-chart-line text-blue-600 text-2xl mr-3"></i>
+            <h1 class="text-3xl font-bold text-gray-900">
+              Performance Metrics
+            </h1>
+          </div>
+          <div class="flex items-center space-x-4">
+            <div class="text-sm text-gray-500">
+              Last Updated: <span id="last-update" class="font-medium">--</span>
+            </div>
+            <button
+              id="refresh-btn"
+              class="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors"
+            >
+              <i class="fas fa-sync-alt mr-2"></i>Refresh
+            </button>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <!-- Main Dashboard -->
+    <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      <!-- System Health Overview -->
+      <div class="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
+        <div
+          class="metric-card bg-white rounded-lg shadow p-6 border-l-4 border-green-500"
+        >
+          <div class="flex items-center">
+            <div class="flex-shrink-0">
+              <i class="fas fa-heart text-green-600 text-2xl"></i>
+            </div>
+            <div class="ml-4">
+              <p class="text-sm font-medium text-gray-500">System Status</p>
+              <p
+                id="system-status"
+                class="text-2xl font-semibold text-gray-900"
+              >
+                <span class="status-indicator status-healthy"></span>Healthy
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <div
+          class="metric-card bg-white rounded-lg shadow p-6 border-l-4 border-blue-500"
+        >
+          <div class="flex items-center">
+            <div class="flex-shrink-0">
+              <i class="fas fa-envelope text-blue-600 text-2xl"></i>
+            </div>
+            <div class="ml-4">
+              <p class="text-sm font-medium text-gray-500">Emails Today</p>
+              <p id="emails-today" class="text-2xl font-semibold text-gray-900">
+                0
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <div
+          class="metric-card bg-white rounded-lg shadow p-6 border-l-4 border-purple-500"
+        >
+          <div class="flex items-center">
+            <div class="flex-shrink-0">
+              <i class="fas fa-clock text-purple-600 text-2xl"></i>
+            </div>
+            <div class="ml-4">
+              <p class="text-sm font-medium text-gray-500">Avg Processing</p>
+              <p
+                id="avg-processing"
+                class="text-2xl font-semibold text-gray-900"
+              >
+                0s
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <div
+          class="metric-card bg-white rounded-lg shadow p-6 border-l-4 border-yellow-500"
+        >
+          <div class="flex items-center">
+            <div class="flex-shrink-0">
+              <i class="fas fa-percentage text-yellow-600 text-2xl"></i>
+            </div>
+            <div class="ml-4">
+              <p class="text-sm font-medium text-gray-500">Success Rate</p>
+              <p id="success-rate" class="text-2xl font-semibold text-gray-900">
+                100%
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Performance Charts -->
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-8">
+        <!-- Processing Performance Chart -->
+        <div class="bg-white rounded-lg shadow p-6">
+          <h3 class="text-lg font-semibold text-gray-900 mb-4">
+            <i class="fas fa-tachometer-alt text-blue-600 mr-2"></i>Processing
+            Performance
+          </h3>
+          <div class="chart-container">
+            <canvas id="performance-chart"></canvas>
+          </div>
+        </div>
+
+        <!-- API Efficiency Chart -->
+        <div class="bg-white rounded-lg shadow p-6">
+          <h3 class="text-lg font-semibold text-gray-900 mb-4">
+            <i class="fas fa-sync text-green-600 mr-2"></i>API Efficiency
+          </h3>
+          <div class="chart-container">
+            <canvas id="api-chart"></canvas>
+          </div>
+        </div>
+      </div>
+
+      <!-- Detailed Metrics -->
+      <div class="grid grid-cols-1 lg:grid-cols-3 gap-8 mb-8">
+        <!-- Performance Metrics -->
+        <div class="bg-white rounded-lg shadow p-6">
+          <h3 class="text-lg font-semibold text-gray-900 mb-4">
+            <i class="fas fa-rocket text-purple-600 mr-2"></i>Performance
+            Details
+          </h3>
+          <div class="space-y-4">
+            <div class="flex justify-between">
+              <span class="text-gray-600">Emails/Hour:</span>
+              <span id="emails-per-hour" class="font-semibold">0</span>
+            </div>
+            <div class="flex justify-between">
+              <span class="text-gray-600">Peak Performance:</span>
+              <span id="peak-performance" class="font-semibold">0s</span>
+            </div>
+            <div class="flex justify-between">
+              <span class="text-gray-600">Processing Trend:</span>
+              <span id="processing-trend" class="font-semibold">--</span>
+            </div>
+            <div class="flex justify-between">
+              <span class="text-gray-600">System Uptime:</span>
+              <span id="system-uptime" class="font-semibold">0h</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- API Metrics -->
+        <div class="bg-white rounded-lg shadow p-6">
+          <h3 class="text-lg font-semibold text-gray-900 mb-4">
+            <i class="fas fa-network-wired text-green-600 mr-2"></i>API
+            Statistics
+          </h3>
+          <div class="space-y-4">
+            <div class="flex justify-between">
+              <span class="text-gray-600">API Calls Made:</span>
+              <span id="api-calls-made" class="font-semibold">0</span>
+            </div>
+            <div class="flex justify-between">
+              <span class="text-gray-600">API Calls Saved:</span>
+              <span id="api-calls-saved" class="font-semibold text-green-600"
+                >0</span
+              >
+            </div>
+            <div class="flex justify-between">
+              <span class="text-gray-600">Batch Operations:</span>
+              <span id="batch-operations" class="font-semibold">0</span>
+            </div>
+            <div class="flex justify-between">
+              <span class="text-gray-600">Avg Batch Size:</span>
+              <span id="avg-batch-size" class="font-semibold">0</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Cache Metrics -->
+        <div class="bg-white rounded-lg shadow p-6">
+          <h3 class="text-lg font-semibold text-gray-900 mb-4">
+            <i class="fas fa-database text-red-600 mr-2"></i>Cache Status
+          </h3>
+          <div class="space-y-4">
+            <div class="flex justify-between">
+              <span class="text-gray-600">Cache Status:</span>
+              <span id="cache-status" class="font-semibold">--</span>
+            </div>
+            <div class="flex justify-between">
+              <span class="text-gray-600">Label Cache Size:</span>
+              <span id="label-cache-size" class="font-semibold">0</span>
+            </div>
+            <div class="flex justify-between">
+              <span class="text-gray-600">Cache Hit Rate:</span>
+              <span id="cache-hit-rate" class="font-semibold">0%</span>
+            </div>
+            <div class="flex justify-between">
+              <span class="text-gray-600">Memory Usage:</span>
+              <span id="cache-memory" class="font-semibold">0 MB</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Recent Job Activity -->
+      <div class="bg-white rounded-lg shadow p-6">
+        <h3 class="text-lg font-semibold text-gray-900 mb-4">
+          <i class="fas fa-history text-indigo-600 mr-2"></i>Recent Job Activity
+        </h3>
+        <div class="overflow-x-auto">
+          <table class="min-w-full divide-y divide-gray-200">
+            <thead class="bg-gray-50">
+              <tr>
+                <th
+                  class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"
+                >
+                  Job ID
+                </th>
+                <th
+                  class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"
+                >
+                  Status
+                </th>
+                <th
+                  class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"
+                >
+                  Emails
+                </th>
+                <th
+                  class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"
+                >
+                  Duration
+                </th>
+                <th
+                  class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"
+                >
+                  Success Rate
+                </th>
+                <th
+                  class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"
+                >
+                  Time
+                </th>
+              </tr>
+            </thead>
+            <tbody id="recent-jobs" class="bg-white divide-y divide-gray-200">
+              <!-- Jobs will be populated here -->
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </main>
+
+    <script src="/frontend/js/metrics-dashboard.js"></script>
+  </body>
+</html>

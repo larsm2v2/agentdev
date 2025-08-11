@@ -1,0 +1,1208 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Email Librarian - AI-Powered Email Organization</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script
+      src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"
+      defer
+    ></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link
+      rel="stylesheet"
+      href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css"
+    />
+    <link rel="stylesheet" href="email_librarian.css" />
+  </head>
+  <body class="bg-gray-50 min-h-screen">
+    <div
+      x-data="enhancedEmailLibrarianApp()"
+      x-init="init()"
+      class="min-h-screen"
+    >
+      <!-- Connection Status Indicator -->
+      <div
+        class="connection-status"
+        :class="connectionStatus"
+        x-show="connectionStatus !== 'connected'"
+      >
+        <i class="fas fa-circle mr-2"></i>
+        <span
+          x-text="connectionStatus.charAt(0).toUpperCase() + connectionStatus.slice(1)"
+        ></span>
+      </div>
+
+      <!-- Notification System -->
+      <div class="fixed top-4 right-4 z-50 space-y-2" style="max-width: 300px">
+        <template x-for="notification in notifications" :key="notification.id">
+          <div
+            class="notification bg-white rounded-lg shadow-lg p-4 border-l-4"
+            :class="`border-${notification.type === 'success' ? 'green' : notification.type === 'error' ? 'red' : 'blue'}-500`"
+            x-transition:enter="transform ease-out duration-300 translate-x-full"
+            x-transition:enter-start="transform translate-x-full"
+            x-transition:enter-end="transform translate-x-0"
+            x-transition:leave="transform ease-in duration-200"
+            x-transition:leave-start="transform translate-x-0"
+            x-transition:leave-end="transform translate-x-full"
+          >
+            <div class="flex justify-between items-start">
+              <div class="flex items-start">
+                <i
+                  :class="`fas ${notification.type === 'success' ? 'fa-check-circle text-green-500' : 
+                                              notification.type === 'error' ? 'fa-exclamation-circle text-red-500' : 
+                                              'fa-info-circle text-blue-500'} mr-2 mt-0.5`"
+                ></i>
+                <div>
+                  <p
+                    class="text-sm font-medium text-gray-900"
+                    x-text="notification.message"
+                  ></p>
+                  <p
+                    class="text-xs text-gray-500"
+                    x-text="new Date(notification.timestamp).toLocaleTimeString()"
+                  ></p>
+                </div>
+              </div>
+              <button
+                @click="dismissNotification(notification.id)"
+                class="text-gray-400 hover:text-gray-600"
+              >
+                <i class="fas fa-times"></i>
+              </button>
+            </div>
+          </div>
+        </template>
+      </div>
+
+      <!-- Loading Overlay -->
+      <div
+        x-show="isLoading"
+        class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-40"
+        x-transition
+      >
+        <div class="bg-white rounded-lg p-6 flex items-center space-x-3">
+          <div class="loading-spinner"></div>
+          <span class="text-gray-700">Processing...</span>
+        </div>
+      </div>
+      <!-- Header -->
+      <header class="librarian-gradient text-white shadow-lg">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div class="flex justify-between items-center h-20">
+            <div class="flex items-center">
+              <i class="fas fa-book-open text-3xl mr-3"></i>
+              <div>
+                <h1 class="text-2xl font-bold">Email Librarian</h1>
+                <p class="text-blue-100 text-sm">
+                  AI-Powered Email Organization System
+                </p>
+              </div>
+            </div>
+            <div class="flex items-center space-x-4">
+              <div class="text-right">
+                <div class="text-sm text-blue-100">Total Processed</div>
+                <div
+                  class="text-xl font-bold"
+                  x-text="stats.totalProcessed"
+                ></div>
+              </div>
+              <div class="text-right">
+                <div class="text-sm text-blue-100">Active Functions</div>
+                <div
+                  class="text-xl font-bold"
+                  x-text="getActiveFunctionsCount()"
+                ></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      <!-- Main Functions Panel -->
+      <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+          <!-- Shelving Function -->
+          <div
+            class="function-card shelving bg-white rounded-lg shadow-md p-6"
+            :class="{ 'active': functions.shelving.enabled }"
+          >
+            <div class="flex justify-between items-start mb-4">
+              <div class="flex items-center">
+                <i class="fas fa-inbox text-3xl text-blue-500 mr-3"></i>
+                <div>
+                  <h3 class="text-xl font-bold text-gray-800">Shelving</h3>
+                  <p class="text-sm text-gray-600">Realtime Organization</p>
+                </div>
+              </div>
+              <label class="toggle-switch">
+                <input
+                  type="checkbox"
+                  x-model="functions.shelving.enabled"
+                  @change="toggleFunction('shelving')"
+                />
+                <span class="slider"></span>
+              </label>
+            </div>
+
+            <p class="text-gray-700 mb-4">
+              Automatically parse and organize incoming emails as they arrive.
+              Perfect for maintaining a clean, organized inbox in real-time.
+            </p>
+
+            <div class="space-y-2 mb-4">
+              <div class="flex justify-between text-sm">
+                <span class="text-gray-600">Status:</span>
+                <span
+                  :class="functions.shelving.enabled ? 'text-green-600' : 'text-red-600'"
+                  x-text="functions.shelving.enabled ? 'Active' : 'Inactive'"
+                ></span>
+              </div>
+              <div class="flex justify-between text-sm">
+                <span class="text-gray-600">Processed Today:</span>
+                <span
+                  class="font-semibold"
+                  x-text="functions.shelving.processedToday"
+                ></span>
+              </div>
+              <div class="flex justify-between text-sm">
+                <span class="text-gray-600">Average Speed:</span>
+                <span
+                  class="font-semibold"
+                  x-text="functions.shelving.avgSpeed + '/min'"
+                ></span>
+              </div>
+            </div>
+
+            <button
+              @click="showTab = 'shelving'"
+              :class="showTab === 'shelving' ? 'bg-blue-600' : 'bg-gray-400'"
+              class="w-full text-white py-2 px-4 rounded-md transition-colors"
+            >
+              <i class="fas fa-eye mr-2"></i>View Details
+            </button>
+          </div>
+
+          <!-- Cataloging Function -->
+          <div
+            class="function-card cataloging bg-white rounded-lg shadow-md p-6"
+            :class="{ 'active': functions.cataloging.enabled }"
+          >
+            <div class="flex justify-between items-start mb-4">
+              <div class="flex items-center">
+                <i class="fas fa-archive text-3xl text-green-500 mr-3"></i>
+                <div>
+                  <h3 class="text-xl font-bold text-gray-800">Cataloging</h3>
+                  <p class="text-sm text-gray-600">
+                    Email Library Organization
+                  </p>
+                </div>
+              </div>
+              <label class="toggle-switch">
+                <input
+                  type="checkbox"
+                  x-model="functions.cataloging.enabled"
+                  @change="toggleFunction('cataloging')"
+                />
+                <span class="slider"></span>
+              </label>
+            </div>
+
+            <p class="text-gray-700 mb-4">
+              Process and organize historical emails (older than 1 day). Build
+              your comprehensive email library with AI-powered categorization.
+            </p>
+
+            <div class="space-y-2 mb-4">
+              <div class="flex justify-between text-sm">
+                <span class="text-gray-600">Status:</span>
+                <span
+                  :class="functions.cataloging.enabled ? 'text-green-600' : 'text-red-600'"
+                  x-text="functions.cataloging.enabled ? 'Active' : 'Inactive'"
+                ></span>
+              </div>
+              <div class="flex justify-between text-sm">
+                <span class="text-gray-600">Historical Emails:</span>
+                <span
+                  class="font-semibold"
+                  x-text="functions.cataloging.historicalCount"
+                ></span>
+              </div>
+              <div class="flex justify-between text-sm">
+                <span class="text-gray-600">Processing Rate:</span>
+                <span
+                  class="font-semibold"
+                  x-text="functions.cataloging.processingRate + '/hour'"
+                ></span>
+              </div>
+            </div>
+
+            <button
+              @click="showTab = 'cataloging'"
+              :class="showTab === 'cataloging' ? 'bg-green-600' : 'bg-gray-400'"
+              class="w-full text-white py-2 px-4 rounded-md transition-colors"
+            >
+              <i class="fas fa-eye mr-2"></i>View Details
+            </button>
+          </div>
+
+          <!-- Reclassification Function -->
+          <div
+            class="function-card reclassification bg-white rounded-lg shadow-md p-6"
+            :class="{ 'active': functions.reclassification.enabled }"
+          >
+            <div class="flex justify-between items-start mb-4">
+              <div class="flex items-center">
+                <i class="fas fa-tags text-3xl text-purple-500 mr-3"></i>
+                <div>
+                  <h3 class="text-xl font-bold text-gray-800">
+                    Reclassification
+                  </h3>
+                  <p class="text-sm text-gray-600">
+                    Email Specific Label Changes
+                  </p>
+                </div>
+              </div>
+              <label class="toggle-switch">
+                <input
+                  type="checkbox"
+                  x-model="functions.reclassification.enabled"
+                  @change="toggleFunction('reclassification')"
+                />
+                <span class="slider"></span>
+              </label>
+            </div>
+
+            <p class="text-gray-700 mb-4">
+              Reorganize groups of emails based on existing labels. Perfect for
+              refining categories and improving organization accuracy.
+            </p>
+
+            <div class="space-y-2 mb-4">
+              <div class="flex justify-between text-sm">
+                <span class="text-gray-600">Status:</span>
+                <span
+                  :class="functions.reclassification.enabled ? 'text-green-600' : 'text-red-600'"
+                  x-text="functions.reclassification.enabled ? 'Active' : 'Inactive'"
+                ></span>
+              </div>
+              <div class="flex justify-between text-sm">
+                <span class="text-gray-600">Labels Monitored:</span>
+                <span
+                  class="font-semibold"
+                  x-text="functions.reclassification.labelsCount"
+                ></span>
+              </div>
+              <div class="flex justify-between text-sm">
+                <span class="text-gray-600">Reclassified:</span>
+                <span
+                  class="font-semibold"
+                  x-text="functions.reclassification.reclassifiedCount"
+                ></span>
+              </div>
+            </div>
+
+            <button
+              @click="showTab = 'reclassification'"
+              :class="showTab === 'reclassification' ? 'bg-purple-600' : 'bg-gray-400'"
+              class="w-full text-white py-2 px-4 rounded-md transition-colors"
+            >
+              <i class="fas fa-eye mr-2"></i>View Details
+            </button>
+          </div>
+
+          <!-- Workflows Function -->
+          <div
+            class="function-card workflows bg-white rounded-lg shadow-md p-6"
+            :class="{ 'active': functions.workflows.enabled }"
+          >
+            <div class="flex justify-between items-start mb-4">
+              <div class="flex items-center">
+                <i
+                  class="fas fa-project-diagram text-3xl text-orange-500 mr-3"
+                ></i>
+                <div>
+                  <h3 class="text-xl font-bold text-gray-800">Workflows</h3>
+                  <p class="text-sm text-gray-600">
+                    n8n Integration & Automation
+                  </p>
+                </div>
+              </div>
+              <label class="toggle-switch">
+                <input
+                  type="checkbox"
+                  x-model="functions.workflows.enabled"
+                  @change="toggleFunction('workflows')"
+                />
+                <span class="slider"></span>
+              </label>
+            </div>
+
+            <p class="text-gray-700 mb-4">
+              Manage and execute automated workflows using n8n integration.
+              Create custom email processing pipelines and trigger automated
+              actions.
+            </p>
+
+            <div class="space-y-2 mb-4">
+              <div class="flex justify-between text-sm">
+                <span class="text-gray-600">Status:</span>
+                <span
+                  :class="functions.workflows.enabled ? 'text-green-600' : 'text-red-600'"
+                  x-text="functions.workflows.enabled ? 'Active' : 'Inactive'"
+                ></span>
+              </div>
+              <div class="flex justify-between text-sm">
+                <span class="text-gray-600">Active Workflows:</span>
+                <span
+                  class="font-semibold"
+                  x-text="functions.workflows.activeCount"
+                ></span>
+              </div>
+              <div class="flex justify-between text-sm">
+                <span class="text-gray-600">Executions Today:</span>
+                <span
+                  class="font-semibold"
+                  x-text="functions.workflows.executionsToday"
+                ></span>
+              </div>
+            </div>
+
+            <button
+              @click="showTab = 'workflows'"
+              :class="showTab === 'workflows' ? 'bg-orange-600' : 'bg-gray-400'"
+              class="w-full text-white py-2 px-4 rounded-md transition-colors"
+            >
+              <i class="fas fa-eye mr-2"></i>View Details
+            </button>
+          </div>
+        </div>
+        <!-- Statistics Overview -->
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
+          <div class="stats-card text-white rounded-lg p-6">
+            <div class="flex items-center justify-between">
+              <div>
+                <p class="text-white/80 text-sm">Emails Processed</p>
+                <p class="text-2xl font-bold" x-text="stats.totalProcessed"></p>
+              </div>
+              <i class="fas fa-envelope text-3xl text-white/60"></i>
+            </div>
+          </div>
+
+          <div class="stats-card blue text-white rounded-lg p-6">
+            <div class="flex items-center justify-between">
+              <div>
+                <p class="text-white/80 text-sm">Categories Created</p>
+                <p
+                  class="text-2xl font-bold"
+                  x-text="stats.categoriesCount"
+                ></p>
+              </div>
+              <i class="fas fa-folder text-3xl text-white/60"></i>
+            </div>
+          </div>
+
+          <div class="stats-card green text-white rounded-lg p-6">
+            <div class="flex items-center justify-between">
+              <div>
+                <p class="text-white/80 text-sm">Processing Speed</p>
+                <p
+                  class="text-2xl font-bold"
+                  x-text="stats.avgSpeed + '/min'"
+                ></p>
+              </div>
+              <i class="fas fa-tachometer-alt text-3xl text-white/60"></i>
+            </div>
+          </div>
+
+          <div class="stats-card purple text-white rounded-lg p-6">
+            <div class="flex items-center justify-between">
+              <div>
+                <p class="text-white/80 text-sm">Accuracy Rate</p>
+                <p
+                  class="text-2xl font-bold"
+                  x-text="stats.accuracyRate + '%'"
+                ></p>
+              </div>
+              <i class="fas fa-bullseye text-3xl text-white/60"></i>
+            </div>
+          </div>
+        </div>
+
+        <!-- Detailed Tab Content -->
+        <div
+          class="bg-white rounded-lg shadow-md tab-content"
+          x-show="showTab"
+          x-transition:enter="transition ease-out duration-300"
+          x-transition:enter-start="opacity-0 transform scale-95"
+          x-transition:enter-end="opacity-100 transform scale-100"
+        >
+          <!-- Shelving Tab -->
+          <div x-show="showTab === 'shelving'" class="p-6">
+            <div class="flex items-center justify-between mb-6">
+              <div class="flex items-center">
+                <i class="fas fa-inbox text-2xl text-blue-500 mr-3"></i>
+                <h2 class="text-2xl font-bold text-gray-800">
+                  Shelving - Realtime Organization
+                </h2>
+              </div>
+              <button
+                @click="exportData()"
+                class="btn bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700"
+              >
+                <i class="fas fa-download mr-2"></i>Export Data
+              </button>
+            </div>
+
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              <div>
+                <h3 class="text-lg font-semibold mb-4">Configuration</h3>
+                <div class="space-y-4">
+                  <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2"
+                      >Processing Interval</label
+                    >
+                    <select
+                      x-model="functions.shelving.config.interval"
+                      class="w-full border border-gray-300 rounded-md px-3 py-2"
+                    >
+                      <option value="1">Every 1 minute</option>
+                      <option value="5">Every 5 minutes</option>
+                      <option value="10">Every 10 minutes</option>
+                      <option value="30">Every 30 minutes</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2"
+                      >Batch Size</label
+                    >
+                    <input
+                      type="number"
+                      x-model="functions.shelving.config.batchSize"
+                      class="w-full border border-gray-300 rounded-md px-3 py-2"
+                      min="1"
+                      max="100"
+                    />
+                  </div>
+                  <div>
+                    <label class="flex items-center">
+                      <input
+                        type="checkbox"
+                        x-model="functions.shelving.config.autoArchive"
+                        class="mr-2"
+                      />
+                      <span class="text-sm">Auto-archive processed emails</span>
+                    </label>
+                  </div>
+                </div>
+              </div>
+
+              <div>
+                <h3 class="text-lg font-semibold mb-4">Recent Activity</h3>
+                <div
+                  class="activity-timeline space-y-3 max-h-64 overflow-y-auto custom-scrollbar"
+                >
+                  <template
+                    x-for="activity in functions.shelving.recentActivity"
+                    :key="activity.id"
+                  >
+                    <div
+                      class="activity-item border-l-4 border-blue-500 pl-4 py-2"
+                    >
+                      <p
+                        class="text-sm font-medium"
+                        x-text="activity.action"
+                      ></p>
+                      <p
+                        class="text-xs text-gray-500"
+                        x-text="activity.timestamp"
+                      ></p>
+                    </div>
+                  </template>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Cataloging Tab -->
+          <div x-show="showTab === 'cataloging'" class="p-6">
+            <div class="flex items-center mb-6">
+              <i class="fas fa-archive text-2xl text-green-500 mr-3"></i>
+              <h2 class="text-2xl font-bold text-gray-800">
+                Cataloging - Email Library Organization
+              </h2>
+            </div>
+
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              <div>
+                <h3 class="text-lg font-semibold mb-4">Batch Processing</h3>
+                <div class="space-y-4">
+                  <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2"
+                      >Date Range</label
+                    >
+                    <div class="grid grid-cols-2 gap-2">
+                      <input
+                        type="date"
+                        x-model="functions.cataloging.config.startDate"
+                        class="border border-gray-300 rounded-md px-3 py-2"
+                      />
+                      <input
+                        type="date"
+                        x-model="functions.cataloging.config.endDate"
+                        class="border border-gray-300 rounded-md px-3 py-2"
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2"
+                      >Batch Size</label
+                    >
+                    <input
+                      type="number"
+                      x-model="functions.cataloging.config.batchSize"
+                      class="w-full border border-gray-300 rounded-md px-3 py-2"
+                      min="10"
+                      max="500"
+                    />
+                  </div>
+                  <button
+                    @click="startCataloging()"
+                    class="w-full bg-green-600 text-white py-2 px-4 rounded-md hover:bg-green-700 transition-colors"
+                  >
+                    <i class="fas fa-play mr-2"></i>Start Cataloging
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <h3 class="text-lg font-semibold mb-4">Progress</h3>
+                <div class="space-y-4">
+                  <div>
+                    <div class="flex justify-between text-sm mb-1">
+                      <span>Overall Progress</span>
+                      <span x-text="functions.cataloging.progress + '%'"></span>
+                    </div>
+                    <div
+                      class="w-full bg-gray-200 rounded-full h-2 progress-bar"
+                    >
+                      <div
+                        class="progress-bar-fill bg-green-600 h-2 rounded-full transition-all duration-300"
+                        :style="`width: ${functions.cataloging.progress}%`"
+                      ></div>
+                    </div>
+                  </div>
+                  <div class="grid grid-cols-2 gap-4 text-sm">
+                    <div>
+                      <span class="text-gray-600">Processed:</span>
+                      <span
+                        class="font-semibold ml-1"
+                        x-text="functions.cataloging.processed"
+                      ></span>
+                    </div>
+                    <div>
+                      <span class="text-gray-600">Remaining:</span>
+                      <span
+                        class="font-semibold ml-1"
+                        x-text="functions.cataloging.remaining"
+                      ></span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Reclassification Tab -->
+          <div x-show="showTab === 'reclassification'" class="p-6">
+            <div class="flex items-center mb-6">
+              <i class="fas fa-tags text-2xl text-purple-500 mr-3"></i>
+              <h2 class="text-2xl font-bold text-gray-800">
+                Reclassification - Email Specific Label Changes
+              </h2>
+            </div>
+
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              <div>
+                <h3 class="text-lg font-semibold mb-4">Label Management</h3>
+                <div class="space-y-4">
+                  <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2"
+                      >Source Label</label
+                    >
+                    <select
+                      x-model="functions.reclassification.config.sourceLabel"
+                      class="w-full border border-gray-300 rounded-md px-3 py-2"
+                    >
+                      <option value="">Select a label to reclassify...</option>
+                      <template
+                        x-for="label in availableLabels"
+                        :key="label.name"
+                      >
+                        <option
+                          :value="label.name"
+                          x-text="`${label.name} (${label.count} emails)`"
+                        ></option>
+                      </template>
+                    </select>
+                  </div>
+                  <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2"
+                      >Target Categories</label
+                    >
+                    <div
+                      class="max-h-32 overflow-y-auto border border-gray-300 rounded-md p-2"
+                    >
+                      <template
+                        x-for="category in availableCategories"
+                        :key="category"
+                      >
+                        <label class="flex items-center py-1">
+                          <input
+                            type="checkbox"
+                            :value="category"
+                            x-model="functions.reclassification.config.targetCategories"
+                            class="mr-2"
+                          />
+                          <span class="text-sm" x-text="category"></span>
+                        </label>
+                      </template>
+                    </div>
+                  </div>
+                  <button
+                    @click="startReclassification()"
+                    class="w-full bg-purple-600 text-white py-2 px-4 rounded-md hover:bg-purple-700 transition-colors"
+                  >
+                    <i class="fas fa-sync mr-2"></i>Start Reclassification
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <h3 class="text-lg font-semibold mb-4">
+                  Reclassification Results
+                </h3>
+                <div class="space-y-3 max-h-64 overflow-y-auto">
+                  <template
+                    x-for="result in functions.reclassification.results"
+                    :key="result.id"
+                  >
+                    <div class="border-l-4 border-purple-500 pl-4 py-2">
+                      <p
+                        class="text-sm font-medium"
+                        x-text="result.summary"
+                      ></p>
+                      <p
+                        class="text-xs text-gray-500"
+                        x-text="result.timestamp"
+                      ></p>
+                      <div class="text-xs text-gray-600 mt-1">
+                        <span
+                          x-text="`${result.processed} processed, ${result.changed} changed`"
+                        ></span>
+                      </div>
+                    </div>
+                  </template>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Workflows Tab -->
+          <div x-show="showTab === 'workflows'" class="p-6">
+            <div class="flex items-center justify-between mb-6">
+              <div class="flex items-center">
+                <i
+                  class="fas fa-project-diagram text-2xl text-orange-500 mr-3"
+                ></i>
+                <h2 class="text-2xl font-bold text-gray-800">
+                  Workflows - n8n Integration & Automation
+                </h2>
+              </div>
+              <div class="flex space-x-2">
+                <button
+                  @click="openN8nDashboard()"
+                  class="btn bg-orange-600 text-white px-4 py-2 rounded-md hover:bg-orange-700"
+                >
+                  <i class="fas fa-external-link-alt mr-2"></i>Open n8n
+                </button>
+                <button
+                  @click="refreshWorkflows()"
+                  class="btn bg-gray-600 text-white px-4 py-2 rounded-md hover:bg-gray-700"
+                >
+                  <i class="fas fa-refresh mr-2"></i>Refresh
+                </button>
+              </div>
+            </div>
+
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              <div>
+                <h3 class="text-lg font-semibold mb-4">Active Workflows</h3>
+                <div
+                  class="space-y-3 max-h-64 overflow-y-auto custom-scrollbar"
+                >
+                  <template
+                    x-for="workflow in functions.workflows.activeWorkflows"
+                    :key="workflow.id"
+                  >
+                    <div
+                      class="workflow-item border border-gray-200 rounded-lg p-4 hover:bg-gray-50"
+                    >
+                      <div class="flex justify-between items-start mb-2">
+                        <h4
+                          class="font-medium text-gray-900"
+                          x-text="workflow.name"
+                        ></h4>
+                        <span
+                          class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium"
+                          :class="workflow.active ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'"
+                          x-text="workflow.active ? 'Active' : 'Inactive'"
+                        ></span>
+                      </div>
+                      <p
+                        class="text-sm text-gray-600 mb-2"
+                        x-text="workflow.description"
+                      ></p>
+                      <div class="flex justify-between text-xs text-gray-500">
+                        <span x-text="`Last run: ${workflow.lastRun}`"></span>
+                        <span
+                          x-text="`Executions: ${workflow.executions}`"
+                        ></span>
+                      </div>
+                      <div class="flex space-x-2 mt-3">
+                        <button
+                          @click="toggleWorkflow(workflow.id)"
+                          :class="workflow.active ? 'bg-red-100 text-red-700 hover:bg-red-200' : 'bg-green-100 text-green-700 hover:bg-green-200'"
+                          class="px-3 py-1 rounded text-xs font-medium transition-colors"
+                        >
+                          <i
+                            :class="workflow.active ? 'fas fa-pause' : 'fas fa-play'"
+                            class="mr-1"
+                          ></i>
+                          <span
+                            x-text="workflow.active ? 'Pause' : 'Start'"
+                          ></span>
+                        </button>
+                        <button
+                          @click="executeWorkflow(workflow.id)"
+                          class="px-3 py-1 bg-blue-100 text-blue-700 hover:bg-blue-200 rounded text-xs font-medium transition-colors"
+                        >
+                          <i class="fas fa-play-circle mr-1"></i>Execute
+                        </button>
+                      </div>
+                    </div>
+                  </template>
+                </div>
+              </div>
+
+              <div>
+                <h3 class="text-lg font-semibold mb-4">
+                  Workflow Execution History
+                </h3>
+                <div
+                  class="space-y-3 max-h-64 overflow-y-auto custom-scrollbar"
+                >
+                  <template
+                    x-for="execution in functions.workflows.executionHistory"
+                    :key="execution.id"
+                  >
+                    <div
+                      class="execution-item border-l-4 pl-4 py-2"
+                      :class="execution.status === 'success' ? 'border-green-500' : 
+                                                execution.status === 'error' ? 'border-red-500' : 'border-yellow-500'"
+                    >
+                      <div class="flex justify-between items-start">
+                        <div>
+                          <p
+                            class="text-sm font-medium"
+                            x-text="execution.workflowName"
+                          ></p>
+                          <p
+                            class="text-xs text-gray-500"
+                            x-text="execution.timestamp"
+                          ></p>
+                        </div>
+                        <span
+                          class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium"
+                          :class="execution.status === 'success' ? 'bg-green-100 text-green-800' : 
+                                                         execution.status === 'error' ? 'bg-red-100 text-red-800' : 'bg-yellow-100 text-yellow-800'"
+                          x-text="execution.status"
+                        ></span>
+                      </div>
+                      <p
+                        class="text-xs text-gray-600 mt-1"
+                        x-text="execution.details"
+                      ></p>
+                    </div>
+                  </template>
+                </div>
+              </div>
+            </div>
+
+            <div class="mt-6 grid grid-cols-1 lg:grid-cols-3 gap-4">
+              <div class="bg-gray-50 rounded-lg p-4">
+                <div class="flex items-center">
+                  <i
+                    class="fas fa-play-circle text-2xl text-green-500 mr-3"
+                  ></i>
+                  <div>
+                    <p class="text-sm text-gray-600">Total Executions</p>
+                    <p
+                      class="text-xl font-bold"
+                      x-text="functions.workflows.totalExecutions"
+                    ></p>
+                  </div>
+                </div>
+              </div>
+              <div class="bg-gray-50 rounded-lg p-4">
+                <div class="flex items-center">
+                  <i
+                    class="fas fa-check-circle text-2xl text-blue-500 mr-3"
+                  ></i>
+                  <div>
+                    <p class="text-sm text-gray-600">Success Rate</p>
+                    <p
+                      class="text-xl font-bold"
+                      x-text="functions.workflows.successRate + '%'"
+                    ></p>
+                  </div>
+                </div>
+              </div>
+              <div class="bg-gray-50 rounded-lg p-4">
+                <div class="flex items-center">
+                  <i class="fas fa-clock text-2xl text-purple-500 mr-3"></i>
+                  <div>
+                    <p class="text-sm text-gray-600">Avg. Duration</p>
+                    <p
+                      class="text-xl font-bold"
+                      x-text="functions.workflows.avgDuration + 's'"
+                    ></p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      function emailLibrarianApp() {
+        return {
+          showTab: "workflows",
+          functions: {
+            shelving: {
+              enabled: false,
+              processedToday: 127,
+              avgSpeed: 15,
+              config: {
+                interval: 5,
+                batchSize: 10,
+                autoArchive: true,
+              },
+              recentActivity: [
+                {
+                  id: 1,
+                  action: "Processed 15 new emails",
+                  timestamp: "2 minutes ago",
+                },
+                {
+                  id: 2,
+                  action: "Applied 12 categories",
+                  timestamp: "5 minutes ago",
+                },
+                {
+                  id: 3,
+                  action: "Auto-archived 8 emails",
+                  timestamp: "8 minutes ago",
+                },
+              ],
+            },
+            cataloging: {
+              enabled: false,
+              historicalCount: 2847,
+              processingRate: 120,
+              config: {
+                startDate: "",
+                endDate: "",
+                batchSize: 50,
+              },
+              progress: 0,
+              processed: 0,
+              remaining: 2847,
+            },
+            reclassification: {
+              enabled: false,
+              labelsCount: 23,
+              reclassifiedCount: 89,
+              config: {
+                sourceLabel: "",
+                targetCategories: [],
+              },
+              results: [
+                {
+                  id: 1,
+                  summary: "Reclassified 'work' emails",
+                  timestamp: "1 hour ago",
+                  processed: 45,
+                  changed: 12,
+                },
+                {
+                  id: 2,
+                  summary: "Updated 'personal' categories",
+                  timestamp: "3 hours ago",
+                  processed: 32,
+                  changed: 8,
+                },
+              ],
+            },
+            workflows: {
+              enabled: true,
+              activeCount: 3,
+              executionsToday: 45,
+              totalExecutions: 1247,
+              successRate: 94,
+              avgDuration: 2.3,
+              activeWorkflows: [
+                {
+                  id: "wf_001",
+                  name: "Email Auto-Classifier",
+                  description:
+                    "Automatically classify incoming emails using AI",
+                  active: true,
+                  lastRun: "5 mins ago",
+                  executions: 234,
+                },
+                {
+                  id: "wf_002",
+                  name: "Priority Email Alerts",
+                  description: "Send notifications for high-priority emails",
+                  active: true,
+                  lastRun: "15 mins ago",
+                  executions: 89,
+                },
+                {
+                  id: "wf_003",
+                  name: "Weekly Email Digest",
+                  description: "Generate and send weekly email summaries",
+                  active: false,
+                  lastRun: "2 days ago",
+                  executions: 12,
+                },
+              ],
+              executionHistory: [
+                {
+                  id: "ex_001",
+                  workflowName: "Email Auto-Classifier",
+                  status: "success",
+                  timestamp: "2 mins ago",
+                  details: "Processed 15 emails, classified into 8 categories",
+                },
+                {
+                  id: "ex_002",
+                  workflowName: "Priority Email Alerts",
+                  status: "success",
+                  timestamp: "8 mins ago",
+                  details: "Sent 3 priority notifications",
+                },
+                {
+                  id: "ex_003",
+                  workflowName: "Email Auto-Classifier",
+                  status: "error",
+                  timestamp: "1 hour ago",
+                  details: "API rate limit exceeded, retrying in 5 minutes",
+                },
+              ],
+            },
+          },
+          stats: {
+            totalProcessed: 3240,
+            categoriesCount: 43,
+            avgSpeed: 25,
+            accuracyRate: 94,
+          },
+          availableLabels: [
+            { name: "work", count: 234 },
+            { name: "personal", count: 156 },
+            { name: "promotions", count: 89 },
+            { name: "newsletters", count: 201 },
+          ],
+          availableCategories: [
+            "work",
+            "personal",
+            "family & friends",
+            "job alerts",
+            "banking",
+            "travel",
+            "shopping",
+            "social media",
+            "newsletters",
+            "promotions",
+          ],
+
+          init() {
+            // Initialize dates
+            const today = new Date();
+            const lastWeek = new Date(
+              today.getTime() - 7 * 24 * 60 * 60 * 1000
+            );
+            this.functions.cataloging.config.endDate = today
+              .toISOString()
+              .split("T")[0];
+            this.functions.cataloging.config.startDate = lastWeek
+              .toISOString()
+              .split("T")[0];
+
+            // Load persisted states
+            this.loadStates();
+
+            // Start monitoring active functions
+            this.startMonitoring();
+          },
+
+          toggleFunction(functionName) {
+            console.log(
+              `Toggling ${functionName}:`,
+              this.functions[functionName].enabled
+            );
+            this.saveStates();
+
+            if (this.functions[functionName].enabled) {
+              this.startFunction(functionName);
+            } else {
+              this.stopFunction(functionName);
+            }
+          },
+
+          startFunction(functionName) {
+            console.log(`Starting ${functionName} function`);
+            // Here you would make API calls to start the specific function
+          },
+
+          stopFunction(functionName) {
+            console.log(`Stopping ${functionName} function`);
+            // Here you would make API calls to stop the specific function
+          },
+
+          getActiveFunctionsCount() {
+            return Object.values(this.functions).filter((f) => f.enabled)
+              .length;
+          },
+
+          startCataloging() {
+            if (!this.functions.cataloging.enabled) {
+              this.functions.cataloging.enabled = true;
+              this.toggleFunction("cataloging");
+            }
+            console.log("Starting cataloging process...");
+            // Here you would start the cataloging process with the configured parameters
+          },
+
+          startReclassification() {
+            if (!this.functions.reclassification.enabled) {
+              this.functions.reclassification.enabled = true;
+              this.toggleFunction("reclassification");
+            }
+            console.log("Starting reclassification process...");
+            // Here you would start the reclassification process
+          },
+
+          openN8nDashboard() {
+            window.open("http://localhost:5678", "_blank");
+          },
+
+          refreshWorkflows() {
+            console.log("Refreshing workflows...");
+            // Here you would make API calls to refresh workflow data
+          },
+
+          toggleWorkflow(workflowId) {
+            console.log(`Toggling workflow ${workflowId}`);
+            const workflow = this.functions.workflows.activeWorkflows.find(
+              (w) => w.id === workflowId
+            );
+            if (workflow) {
+              workflow.active = !workflow.active;
+              // Here you would make API call to n8n to start/stop the workflow
+            }
+          },
+
+          executeWorkflow(workflowId) {
+            console.log(`Executing workflow ${workflowId}`);
+            // Here you would make API call to n8n to execute the workflow
+            const workflow = this.functions.workflows.activeWorkflows.find(
+              (w) => w.id === workflowId
+            );
+            if (workflow) {
+              workflow.lastRun = "just now";
+              workflow.executions += 1;
+
+              // Add to execution history
+              this.functions.workflows.executionHistory.unshift({
+                id: `ex_${Date.now()}`,
+                workflowName: workflow.name,
+                status: "success",
+                timestamp: "just now",
+                details: "Manual execution completed successfully",
+              });
+
+              // Keep only last 10 executions
+              if (this.functions.workflows.executionHistory.length > 10) {
+                this.functions.workflows.executionHistory =
+                  this.functions.workflows.executionHistory.slice(0, 10);
+              }
+            }
+          },
+
+          saveStates() {
+            const states = {
+              functions: this.functions,
+              showTab: this.showTab,
+            };
+            localStorage.setItem(
+              "emailLibrarianStates",
+              JSON.stringify(states)
+            );
+          },
+
+          loadStates() {
+            const saved = localStorage.getItem("emailLibrarianStates");
+            if (saved) {
+              const states = JSON.parse(saved);
+              this.functions = { ...this.functions, ...states.functions };
+              this.showTab = states.showTab || "workflows";
+            }
+          },
+
+          startMonitoring() {
+            // Simulate real-time updates
+            setInterval(() => {
+              if (this.functions.shelving.enabled) {
+                this.functions.shelving.processedToday += Math.floor(
+                  Math.random() * 3
+                );
+              }
+              if (
+                this.functions.cataloging.enabled &&
+                this.functions.cataloging.progress < 100
+              ) {
+                this.functions.cataloging.progress += Math.floor(
+                  Math.random() * 2
+                );
+                this.functions.cataloging.processed += Math.floor(
+                  Math.random() * 5
+                );
+                this.functions.cataloging.remaining = Math.max(
+                  0,
+                  this.functions.cataloging.remaining -
+                    Math.floor(Math.random() * 5)
+                );
+              }
+            }, 5000);
+          },
+        };
+      }
+    </script>
+  </body>
+</html>

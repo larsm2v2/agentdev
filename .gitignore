@@ -1,0 +1,308 @@
+# Enhanced Email Librarian - Comprehensive .gitignore
+
+# ========================================
+# CREDENTIALS & SECRETS (CRITICAL!)
+# ========================================
+# Environment files with secrets
+.env
+.env.local
+.env.development
+.env.test
+.env.production
+
+# API Keys and tokens
+**/credentials.json
+**/token.json
+**/gmail_token.pickle
+**/*_credentials*
+**/*_token*
+**/*_key*
+**/*_secret*
+
+# OAuth and authentication files
+oauth_*
+auth_*
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+
+# Database credentials
+database.ini
+db_config.json
+
+# ========================================
+# DATA & CACHE FILES
+# ========================================
+# Email processing data
+data/
+email_cache/
+processed_emails_log.json
+gmail_digest_*.html
+
+# Cache directories
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Logs
+logs/
+*.log
+*.log.*
+
+# ========================================
+# DOCKER & INFRASTRUCTURE
+# ========================================
+# Docker volumes and data
+docker-data/
+postgres_data/
+redis_data/
+qdrant_data/
+grafana_data/
+prometheus_data/
+
+# Docker environment files
+docker-compose.override.yml
+.dockerignore.local
+
+# ========================================
+# PYTHON SPECIFIC
+# ========================================
+# Virtual environments
+venv/
+env/
+ENV/
+.venv/
+.env/
+
+# Distribution / packaging
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Unit test / coverage reports
+.tox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# pyenv
+.python-version
+
+# pipenv
+Pipfile.lock
+
+# ========================================
+# IDE & EDITOR FILES
+# ========================================
+# VSCode
+.vscode/settings.json
+.vscode/launch.json
+.vscode/extensions.json
+.vscode/tasks.json
+
+# PyCharm
+.idea/
+*.iws
+*.iml
+*.ipr
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# Vim
+*.swp
+*.swo
+*~
+
+# Emacs
+*~
+\#*\#
+/.emacs.desktop
+/.emacs.desktop.lock
+*.elc
+
+# ========================================
+# OPERATING SYSTEM FILES
+# ========================================
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+._*
+.Spotlight-V100
+.Trashes
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.lnk
+
+# Linux
+*~
+.directory
+.Trash-*
+
+# ========================================
+# TEMPORARY & BACKUP FILES
+# ========================================
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.temp
+*.bak
+*.backup
+*.orig
+*.save
+
+# Node.js (if any frontend tools)
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# ========================================
+# PROJECT SPECIFIC
+# ========================================
+# LangFuse traces and observability data
+langfuse_traces/
+observability_data/
+
+# n8n workflow backups (keep templates, not instances)
+n8n/backups/
+n8n/instances/
+
+# Email processing artifacts
+email_vectors/
+embeddings_cache/
+model_cache/
+
+# Monitoring data
+monitoring/data/
+metrics_cache/
+
+# Migration backups
+migrations/backups/
+
+# Test outputs
+test_outputs/
+test_data/
+
+# ========================================
+# DEVELOPMENT FILES TO KEEP
+# ========================================
+# These are commented out - keep these files!
+# docker-compose.yml
+# docker-compose.*.yml
+# Dockerfile*
+# requirements*.txt
+# .env.example
+# README*.md
+# *.py
+# src/
+# config/ (templates only)
+# frontend/
+# migrations/ (schema only)
+
+# ========================================
+# LARGE FILES & ARCHIVES
+# ========================================
+# Large data files
+*.zip
+*.tar.gz
+*.rar
+*.7z
+models/
+embeddings/
+*.pkl
+*.pickle (except specifically needed ones)
+
+# Media files (unless needed)
+*.mp4
+*.avi
+*.mov
+*.wav
+*.mp3
+
+# ========================================
+# SECURITY SENSITIVE
+# ========================================
+# SSL certificates
+ssl/
+certificates/
+*.csr
+
+# SSH keys
+*.ssh/
+id_rsa*
+id_dsa*
+id_ecdsa*
+id_ed25519*
+
+# GPG keys
+*.gpg
+*.asc
+
+# ========================================
+# CI/CD & DEPLOYMENT
+# ========================================
+# Deployment scripts with secrets
+deploy_prod.sh
+deploy_staging.sh
+**/secrets/
+
+# Terraform state files
+*.tfstate
+*.tfstate.*
+.terraform/
+
+# Kubernetes secrets
+*-secret.yaml
+*-secrets.yaml
+
+# ========================================
+# NOTES FOR CLEANUP
+# ========================================
+# Files you mentioned that might be unused:
+# - Verify if these are needed before committing:
+#   - simple_auth_check.py
+#   - test_gmail_auth.py
+#   - requirements_clean.txt
+# - Consider moving to a /scripts or /tests directory if keeping
+
+# ========================================
+# UNUSED
+# ========================================
+**/unused/

@@ -1,0 +1,49 @@
+# Redis Configuration for Enhanced Email Librarian
+# Add this to your existing docker-compose.yml or use as standalone Redis setup
+
+version: "3.8"
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: email_librarian_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+      - ./redis.conf:/usr/local/etc/redis/redis.conf
+    command: redis-server /usr/local/etc/redis/redis.conf
+    environment:
+      - REDIS_REPLICATION_MODE=master
+    networks:
+      - email_librarian_network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: email_librarian_redis_ui
+    restart: unless-stopped
+    ports:
+      - "8081:8081"
+    environment:
+      - REDIS_HOSTS=local:redis:6379
+      - HTTP_USER=admin
+      - HTTP_PASSWORD=admin
+    networks:
+      - email_librarian_network
+    depends_on:
+      - redis
+
+volumes:
+  redis_data:
+    driver: local
+
+networks:
+  email_librarian_network:
+    external: true

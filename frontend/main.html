@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Email Librarian - AI-Powered Email Organization</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link
+      rel="stylesheet"
+      href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css"
+    />
+
+    <script>
+      // Prevent Alpine.js from auto-starting
+      window.deferLoadingAlpine = true;
+
+      // Detect if we're in local development or production
+      const isDev = window.location.port === "8001";
+      const basePath = isDev ? "" : "/frontend";
+
+      // Dynamically load CSS
+      const cssLink = document.createElement("link");
+      cssLink.rel = "stylesheet";
+      cssLink.href = `${basePath}/styles/email_librarian.css`;
+      document.head.appendChild(cssLink);
+
+      // Function to load scripts after DOM is ready
+      function loadScripts() {
+        const scripts = [
+          `${basePath}/js/core.js`,
+          `${basePath}/js/components-loader.js`,
+        ];
+
+        // Load scripts sequentially to ensure proper order
+        let scriptIndex = 0;
+
+        function loadNextScript() {
+          if (scriptIndex >= scripts.length) {
+            // All scripts loaded, now load and start Alpine.js
+            const alpineScript = document.createElement("script");
+            alpineScript.src =
+              "https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js";
+            alpineScript.onload = () => {
+              // Alpine.js will auto-start since we didn't defer it
+              console.log("All scripts and Alpine.js loaded successfully");
+            };
+            document.head.appendChild(alpineScript);
+            return;
+          }
+
+          const script = document.createElement("script");
+          script.src = scripts[scriptIndex];
+          script.onload = () => {
+            console.log(`Loaded: ${scripts[scriptIndex]}`);
+            scriptIndex++;
+            loadNextScript();
+          };
+          script.onerror = (error) => {
+            console.error(
+              `Failed to load script: ${scripts[scriptIndex]}`,
+              error
+            );
+            scriptIndex++;
+            loadNextScript();
+          };
+          document.body.appendChild(script);
+        }
+
+        loadNextScript();
+      }
+
+      // Load scripts when DOM is ready
+      if (document.readyState === "loading") {
+        document.addEventListener("DOMContentLoaded", loadScripts);
+      } else {
+        loadScripts();
+      }
+    </script>
+  </head>
+  <body class="bg-gray-50 min-h-screen">
+    <div x-data="emailLibrarianApp()" x-init="init()" class="min-h-screen">
+      <!-- Connection Status & Notifications -->
+      <div id="status-notifications-container">Loading status...</div>
+
+      <!-- Header -->
+      <div id="header-container">Loading header...</div>
+
+      <!-- Main Content -->
+      <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        <!-- Function Cards Grid -->
+        <div id="function-cards-container">Loading function cards...</div>
+
+        <!-- Statistics Overview -->
+        <div id="statistics-container">Loading statistics...</div>
+
+        <!-- Tab Content -->
+        <div id="tab-content-container">Loading tabs...</div>
+      </div>
+    </div>
+  </body>
+</html>
