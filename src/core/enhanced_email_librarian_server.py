@@ -9,7 +9,7 @@ import json
 import logging
 import pickle
 import hashlib
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, List, Any, Optional, Union, Tuple
 import uuid
@@ -1305,16 +1305,22 @@ class EnhancedEmailLibrarianServer:
             labels_applied = 0
             
             # Get messages from Gmail
+            messages_result = None
             try:
-                messages_result = self.gmail_organizer.service.users().messages().list(
-                    userId='me', 
-                    maxResults=max_emails,
-                    q='in:inbox'  # Focus on inbox for shelving
-                ).execute()
-                
-                messages = messages_result.get('messages', [])
-                logger.info(f"Found {len(messages)} messages to process with Qdrant integration")
-                
+                if self.gmail_organizer and self.gmail_organizer.service:
+                    messages_result = self.gmail_organizer.service.users().messages().list(
+                        userId='me', 
+                        maxResults=max_emails,
+                        q='in:inbox'  # Focus on inbox for shelving
+                    ).execute()
+                else:
+                    logger.warning("⚠️ Gmail Organizer Users is None after from_url")
+                if messages_result is not None:
+                    messages = messages_result.get('messages', [])
+                    logger.info(f"Found {len(messages)} messages to process with Qdrant integration")
+                else:
+                    messages = []
+                    logger.warning("No messages retrieved from Gmail.")
                 # Process messages in optimized batches using Gmail Batch API
                 email_categories_batch = []  # Collect email-category pairs for batch label processing
                 
@@ -1483,15 +1489,20 @@ class EnhancedEmailLibrarianServer:
                 score_threshold=threshold
             )
             
-            return [
-                {
-                    "email_id": hit.payload.get("email_id"),
-                    "category": hit.payload.get("category"),
-                    "subject": hit.payload.get("subject"),
-                    "similarity_score": hit.score
-                }
-                for hit in search_result
-            ]
+            if search_result:
+                return [
+                    {
+                        "email_id": hit.payload.get("email_id"),
+                        "category": hit.payload.get("category"),
+                        "subject": hit.payload.get("subject"),
+                        "similarity_score": hit.score
+                    }
+                    for hit in search_result
+                    if hit.payload
+                ]
+            else:
+                logger.warning("Payload is incomplete")
+                return []
         except Exception as e:
             logger.warning(f"Vector search failed: {e}")
             return []
@@ -1520,16 +1531,17 @@ class EnhancedEmailLibrarianServer:
             label_id = await self._get_or_create_gmail_label_cached(category)
             
             # Apply label to message
-            self.gmail_organizer.service.users().messages().modify(
-                userId='me',
-                id=message_id,
-                body={
-                    'addLabelIds': [label_id],
-                    'removeLabelIds': []  # Keep in inbox for now
-                }
-            ).execute()
-            
-            logger.info(f"Applied label '{category}' to message {message_id}")
+            if self.gmail_organizer and self.gmail_organizer.service:
+                self.gmail_organizer.service.users().messages().modify(
+                    userId='me',
+                    id=message_id,
+                    body={
+                        'addLabelIds': [label_id],
+                        'removeLabelIds': []  # Keep in inbox for now
+                    }
+                ).execute()
+                
+                logger.info(f"Applied label '{category}' to message {message_id}")
             
         except Exception as e:
             logger.error(f"Failed to apply label '{category}' to {message_id}: {e}")
@@ -1628,50 +1640,45 @@ class EnhancedEmailLibrarianServer:
     async def _apply_single_label_async_with_retry(self, email_id: str, label_id: str, category: str, max_retries: int = 3) -> bool:
         """Async wrapper for individual label application with smart retry logic"""
         import asyncio
-        from concurrent.futures import ThreadPoolExecutor
         import random
-        
+
         for attempt in range(max_retries + 1):
-            try:
-                # Execute Gmail API call in thread pool to avoid blocking
-                loop = asyncio.get_event_loop()
-                with ThreadPoolExecutor(max_workers=5) as executor:
-                    await loop.run_in_executor(
-                        executor,
-                        lambda: self.gmail_organizer.service.users().messages().modify(
+            if self.gmail_organizer and self.gmail_organizer.service:
+                try:
+                    # Use asyncio.to_thread to run blocking code in a thread
+                    await asyncio.to_thread(
+                        self.gmail_organizer.service.users().messages().modify(
                             userId='me',
                             id=email_id,
                             body={
                                 'addLabelIds': [label_id],
                                 'removeLabelIds': []
                             }
-                        ).execute()
+                        ).execute
                     )
-                
-                logger.debug(f"✅ Applied label '{category}' to email {email_id}")
-                return True
-                
-            except Exception as e:
-                if attempt < max_retries:
-                    # Check if it's a rate limit error
-                    if hasattr(e, 'resp') and hasattr(e.resp, 'status') and e.resp.status in [429, 503]:
-                        # Gmail API rate limit - use exponential backoff with jitter
-                        base_delay = 2 ** attempt  # Exponential: 1s, 2s, 4s
+                    logger.debug(f"✅ Applied label '{category}' to email {email_id}")
+                    return True
+
+                except Exception as e:
+                    if attempt < max_retries:
+                        # Check if it's a rate limit error
+                        resp = getattr(e, 'resp', None)
+                        is_rate_limit_error = resp and hasattr(resp, 'status') and resp.status in [429, 503]
+                        base_delay = 2 ** attempt  # Exponential backoff: 1s, 2s, 4s
                         jitter = random.uniform(0.5, 1.5)
                         wait_time = base_delay * jitter
-                        
-                        logger.warning(f"Rate limit hit for {email_id}, retrying in {wait_time:.2f}s (attempt {attempt + 1})")
+
+                        if is_rate_limit_error:
+                            logger.warning(f"Rate limit hit for {email_id}, retrying in {wait_time:.2f}s (attempt {attempt + 1})")
+                        else:
+                            logger.warning(f"API error for {email_id}: {e}, retrying in {wait_time:.2f}s (attempt {attempt + 1})")
+
                         await asyncio.sleep(wait_time)
                     else:
-                        # Regular error - shorter delay
-                        wait_time = (attempt + 1) * 0.5  # Linear: 0.5s, 1s, 1.5s
-                        logger.warning(f"API error for {email_id}: {e}, retrying in {wait_time}s (attempt {attempt + 1})")
-                        await asyncio.sleep(wait_time)
-                else:
-                    # Final attempt failed
-                    logger.warning(f"❌ Failed to apply label '{category}' to {email_id} after {max_retries + 1} attempts: {e}")
-                    return False
-        
+                        # Final attempt failed
+                        logger.error(f"❌ Failed to apply label '{category}' to {email_id} after {max_retries + 1} attempts: {e}")
+                        return False
+        logger.error(f"❌ Failed to apply label '{category}' to {email_id}: Gmail organizer or service not initialized.")
         return False
 
     async def _process_batch_with_parallel_vectors(self, batch_ids: List[Dict], batch_messages: List[Dict], similarity_threshold: float) -> List[Dict]:
@@ -1679,12 +1686,12 @@ class EnhancedEmailLibrarianServer:
         import asyncio
         import uuid
         from datetime import datetime
-        
+        email_data = []
         try:
             logger.info(f"🚀 Starting parallel vector processing for {len(batch_messages)} emails")
             
             # Phase 1: Extract email content and prepare for parallel processing
-            email_data = []
+           
             for j, msg in enumerate(batch_messages):
                 try:
                     message_id = batch_ids[j]['id']
@@ -1725,7 +1732,7 @@ class EnhancedEmailLibrarianServer:
             valid_embeddings = []
             
             for i, embedding in enumerate(embeddings):
-                if not isinstance(embedding, Exception) and embedding is not None:
+                if isinstance(embedding, list):
                     similarity_tasks.append(self._find_similar_emails(embedding, similarity_threshold))
                     valid_embeddings.append((i, embedding, email_data[i]))
                 else:
@@ -1744,7 +1751,18 @@ class EnhancedEmailLibrarianServer:
             processing_tasks = []
             for i, (original_idx, embedding, email) in enumerate(valid_embeddings):
                 if embedding is not None and i < len(similarity_results):
-                    similar_emails = similarity_results[i] if not isinstance(similarity_results[i], Exception) else []
+                    # Ensure similar_emails is a valid list, not an exception
+                    if isinstance(similarity_results[i], Exception):
+                        similar_emails = []  # Use empty list for failed similarity searches
+                    elif isinstance(similarity_results[i], list):
+                        similar_emails = similarity_results[i]  # Use the actual results
+                    else:
+                        similar_emails = []  # Fallback for unexpected types
+
+                    # Ensure similar_emails is always a list
+                    if not isinstance(similar_emails, list):
+                        similar_emails = []
+
                     task = self._process_single_email_vector(email, embedding, similar_emails)
                     processing_tasks.append(task)
                 else:
@@ -1761,7 +1779,7 @@ class EnhancedEmailLibrarianServer:
             
             for result in processing_results:
                 if isinstance(result, Exception):
-                    logger.warning(f"Processing task failed: {result}")
+                    logger.warning(f"Processing task failed: {result}",exc_info=True)
                     results.append({
                         'success': False,
                         'message_id': 'unknown',
@@ -1771,7 +1789,7 @@ class EnhancedEmailLibrarianServer:
                     })
                 else:
                     results.append(result)
-                    if result['success'] and result.get('point'):
+                    if isinstance(result, dict) and result.get('success') and result.get('point'):
                         valid_points.append(result['point'])
             
             # Batch upsert to Qdrant for maximum efficiency
@@ -1814,16 +1832,20 @@ class EnhancedEmailLibrarianServer:
         except Exception as e:
             logger.error(f"Parallel vector processing failed: {e}")
             # Return fallback results
-            return [
-                {
-                    'success': False,
-                    'message_id': email.get('message_id', 'unknown'),
-                    'category': 'Uncategorized',
-                    'subject': email.get('subject', 'Unknown'),
-                    'vector_stored': False
-                }
-                for email in email_data
-            ]
+            if email_data:
+                return [
+                    {
+                        'success': False,
+                        'message_id': email.get('message_id', 'unknown'),
+                        'category': 'Uncategorized',
+                        'subject': email.get('subject', 'Unknown'),
+                        'vector_stored': False
+                    }
+                    for email in email_data
+                ]
+            else:
+                logger.warning("No valid email data extracted for parallel processing.")
+                return []
 
     async def _process_single_email_vector(self, email: Dict, embedding: List[float], similar_emails: List[Dict]) -> Dict:
         """Process individual email with vector operations"""
@@ -1837,8 +1859,9 @@ class EnhancedEmailLibrarianServer:
             )
             
             # Prepare Qdrant point
-            point_id = str(uuid.uuid4())
+            point_id = str(uuid.uuid4)
             point = {
+               
                 "id": point_id,
                 "vector": embedding,
                 "payload": {
@@ -1899,77 +1922,79 @@ class EnhancedEmailLibrarianServer:
 
     async def _get_or_create_gmail_label_cached(self, category: str) -> Optional[str]:
         """Get existing Gmail label or create new one with Redis-backed intelligent caching"""
-        try:
-            # Initialize label cache if not exists
-            if not hasattr(self, '_label_cache'):
-                await self._initialize_label_cache()
-            
-            # Return cached label if exists
-            if category in self._label_cache:
-                return self._label_cache[category]
-            
-            # Create new label
-            new_label = {
-                'name': category,
-                'messageListVisibility': 'show',
-                'labelListVisibility': 'labelShow',
-                'color': {
-                    'backgroundColor': self._generate_label_color(category),
-                    'textColor': '#ffffff'
+        if self.gmail_organizer and self.gmail_organizer.service:
+            try:
+                # Initialize label cache if not exists
+                if not hasattr(self, '_label_cache'):
+                    await self._initialize_label_cache()
+                
+                # Return cached label if exists
+                if category in self._label_cache:
+                    return self._label_cache[category]
+                
+                # Create new label
+                new_label = {
+                    'name': category,
+                    'messageListVisibility': 'show',
+                    'labelListVisibility': 'labelShow',
+                    'color': {
+                        'backgroundColor': self._generate_label_color(category),
+                        'textColor': '#ffffff'
+                    }
                 }
-            }
-            
-            created_label = self.gmail_organizer.service.users().labels().create(
-                userId='me',
-                body=new_label
-            ).execute()
-            
-            # Cache the new label in memory
-            self._label_cache[category] = created_label['id']
-            
-            # Cache in Redis if available
-            if self._redis_enabled and self.cache_manager:
-                await self.cache_manager.add_label_to_cache(category, created_label['id'])
-            
-            logger.info(f"🏷️ Created and cached new Gmail label: {category}")
-            
-            return created_label['id']
-            
-        except Exception as e:
-            logger.error(f"Failed to get/create label '{category}': {e}")
-            raise
+                
+                created_label = self.gmail_organizer.service.users().labels().create(
+                    userId='me',
+                    body=new_label
+                ).execute()
+                
+                # Cache the new label in memory
+                self._label_cache[category] = created_label['id']
+                
+                # Cache in Redis if available
+                if self._redis_enabled and self.cache_manager:
+                    await self.cache_manager.add_label_to_cache(category, created_label['id'])
+                
+                logger.info(f"🏷️ Created and cached new Gmail label: {category}")
+                
+                return created_label['id']
+                
+            except Exception as e:
+                logger.error(f"Failed to get/create label '{category}': {e}")
+                raise
 
     async def _initialize_label_cache_from_gmail(self):
         """Initialize label cache with existing Gmail labels (called from Redis loader)"""
-        try:
-            self._label_cache = {}
-            self._our_custom_labels = set()
-            
-            # Get all existing labels
-            labels_result = self.gmail_organizer.service.users().labels().list(userId='me').execute()
-            labels = labels_result.get('labels', [])
-            
-            # Cache non-system labels
-            for label in labels:
-                label_name = label.get('name', '')
-                label_id = label.get('id', '')
+        if self.gmail_organizer and self.gmail_organizer.service:
+            try:
+                self._label_cache = {}
+                self._our_custom_labels = set()
                 
-                # Skip system labels
-                if not label_name.startswith(('CATEGORY_', 'SYSTEM_')) and label_name not in [
-                    'INBOX', 'SENT', 'DRAFT', 'SPAM', 'TRASH', 'IMPORTANT', 'STARRED', 'UNREAD'
-                ]:
-                    self._label_cache[label_name] = label_id
-                    # Track our custom labels for smart relabeling
-                    if label_name in ['Work', 'Personal', 'Shopping', 'Finance', 'Social Media', 
-                                    'News', 'Travel', 'Health', 'Uncategorized']:
-                        self._our_custom_labels.add(label_id)
-            
-            logger.info(f"📋 Initialized label cache with {len(self._label_cache)} existing labels from Gmail")
-            
-        except Exception as e:
-            logger.error(f"Failed to initialize label cache from Gmail: {e}")
-            self._label_cache = {}
-            self._our_custom_labels = set()
+                # Get all existing labels
+                labels_result = self.gmail_organizer.service.users().labels().list(userId='me').execute()
+                labels = labels_result.get('labels', [])
+                
+                # Cache non-system labels
+                for label in labels:
+                    label_name = label.get('name', '')
+                    label_id = label.get('id', '')
+                    
+                    # Skip system labels
+                    if not label_name.startswith(('CATEGORY_', 'SYSTEM_')) and label_name not in [
+                        'INBOX', 'SENT', 'DRAFT', 'SPAM', 'TRASH', 'IMPORTANT', 'STARRED', 'UNREAD'
+                    ]:
+                        self._label_cache[label_name] = label_id
+                        # Track our custom labels for smart relabeling
+                        if label_name in ['Work', 'Personal', 'Shopping', 'Finance', 'Social Media', 
+                                        'News', 'Travel', 'Health', 'Uncategorized']:
+                            self._our_custom_labels.add(label_id)
+                
+                logger.info(f"📋 Initialized label cache with {len(self._label_cache)} existing labels from Gmail")
+                
+            except Exception as e:
+                logger.error(f"Failed to initialize label cache from Gmail: {e}")
+                self._label_cache = {}
+                self._our_custom_labels = set()
 
     async def _initialize_label_cache(self):
         """Initialize label cache with Redis-first approach"""
@@ -2021,139 +2046,96 @@ class EnhancedEmailLibrarianServer:
         except Exception as e:
             logger.error(f"Failed to cache job analytics: {e}")
 
-    async def _get_or_create_gmail_label(self, category: str) -> str:
+    async def _get_or_create_gmail_label(self, category: str) -> Optional[str]:
         """Legacy method - use _get_or_create_gmail_label_cached instead"""
         logger.warning("Using legacy label method - consider using cached version")
         return await self._get_or_create_gmail_label_cached(category)
 
-    def _generate_label_color(self, category: str) -> str:
-        """Generate consistent colors for label categories"""
-        color_map = {
-            'Work': '#ff9900',          # Orange
-            'Personal': '#0099ff',      # Blue  
-            'Shopping': '#ff3366',      # Red
-            'Finance': '#00cc44',       # Green
-            'Social Media': '#9933ff',  # Purple
-            'News': '#ffcc00',          # Yellow
-            'Travel': '#00ccff',        # Light Blue
-            'Health': '#ff6600',        # Dark Orange
-            'Uncategorized': '#999999'  # Gray
-        }
-        return color_map.get(category, '#666666')  # Default gray
-        """Get existing Gmail label or create new one"""
-        try:
-            # List existing labels
-            labels_result = self.gmail_organizer.service.users().labels().list(userId='me').execute()
-            labels = labels_result.get('labels', [])
-            
-            # Check if label exists
-            for label in labels:
-                if label['name'] == category:
-                    return label['id']
-            
-            # Create new label
-            new_label = {
-                'name': category,
-                'messageListVisibility': 'show',
-                'labelListVisibility': 'labelShow',
-                'color': {
-                    'backgroundColor': self._generate_label_color(category),
-                    'textColor': '#ffffff'
-                }
-            }
-            
-            created_label = self.gmail_organizer.service.users().labels().create(
-                userId='me',
-                body=new_label
-            ).execute()
-            
-            logger.info(f"Created new Gmail label: {category}")
-            return created_label['id']
-            
-        except Exception as e:
-            logger.error(f"Failed to get/create label '{category}': {e}")
-            raise
-
     async def _get_messages_batch(self, message_ids: List[str]) -> List[dict]:
         """Get multiple messages using Gmail Batch API for optimal performance"""
-        try:
-            from googleapiclient.http import BatchHttpRequest
-            import asyncio
-            from concurrent.futures import ThreadPoolExecutor
+        if self.gmail_organizer and self.gmail_organizer.service:
+            try:
+                from googleapiclient.http import BatchHttpRequest
+                import asyncio
+                from concurrent.futures import ThreadPoolExecutor
+                
+                if not message_ids:
+                    return []
+                
+                # Gmail Batch API can handle up to 100 requests per batch
+                batch_size = min(100, len(message_ids))
+                batch_results = {}
+                exceptions = {}
+                
+                def callback(request_id, response, exception):
+                    if exception:
+                        logger.warning(f"Batch request failed for message {request_id}: {exception}")
+                        exceptions[request_id] = exception
+                    else:
+                        batch_results[request_id] = response
+                
+                # Create batch request
+                batch_request = BatchHttpRequest(callback=callback)
+                
+                # Add requests to batch (up to 100)
+                for i, msg_id in enumerate(message_ids[:batch_size]):
+                    batch_request.add(
+                        self.gmail_organizer.service.users().messages().get(
+                            userId='me', 
+                            id=msg_id,
+                            format='full'  # Get full message data
+                        ),
+                        request_id=str(i)
+                    )
+                
+                # Execute batch request in thread pool to avoid blocking
+                loop = asyncio.get_event_loop()
+                with ThreadPoolExecutor() as executor:
+                    await loop.run_in_executor(executor, batch_request.execute)
+                
+                # Return results in original order
+                results = []
+                for i in range(len(message_ids[:batch_size])):
+                    if str(i) in batch_results:
+                        results.append(batch_results[str(i)])
+                    else:
+                        logger.warning(f"No result for message index {i}")
+                        # Add empty result to maintain index alignment
+                        results.append({
+                            'id': message_ids[i],
+                            'payload': {'headers': []},
+                            'snippet': 'Error retrieving message'
+                        })
+                
+                logger.info(f"📦 Batch API retrieved {len(results)} messages in single request")
+                return results
+                
+            except Exception as e:
+                logger.error(f"Batch message retrieval failed: {e}")
+                # Fallback to individual requests
+                return await self._get_messages_individual(message_ids)
+        # If gmail_organizer or its service is not initialized, return empty list
+        return []
+    
+    async def _get_messages_individual(self, message_ids: List[str]) -> List[dict]:
+        results = []
+        if self.gmail_organizer and self.gmail_organizer.service:
+            """Fallback method for individual message retrieval"""
             
-            if not message_ids:
-                return []
-            
-            # Gmail Batch API can handle up to 100 requests per batch
-            batch_size = min(100, len(message_ids))
-            batch_results = {}
-            exceptions = {}
-            
-            def callback(request_id, response, exception):
-                if exception:
-                    logger.warning(f"Batch request failed for message {request_id}: {exception}")
-                    exceptions[request_id] = exception
-                else:
-                    batch_results[request_id] = response
-            
-            # Create batch request
-            batch_request = BatchHttpRequest(callback=callback)
-            
-            # Add requests to batch (up to 100)
-            for i, msg_id in enumerate(message_ids[:batch_size]):
-                batch_request.add(
-                    self.gmail_organizer.service.users().messages().get(
+            for msg_id in message_ids:
+                try:
+                    msg = self.gmail_organizer.service.users().messages().get(
                         userId='me', 
-                        id=msg_id,
-                        format='full'  # Get full message data
-                    ),
-                    request_id=str(i)
-                )
-            
-            # Execute batch request in thread pool to avoid blocking
-            loop = asyncio.get_event_loop()
-            with ThreadPoolExecutor() as executor:
-                await loop.run_in_executor(executor, batch_request.execute)
-            
-            # Return results in original order
-            results = []
-            for i in range(len(message_ids[:batch_size])):
-                if str(i) in batch_results:
-                    results.append(batch_results[str(i)])
-                else:
-                    logger.warning(f"No result for message index {i}")
-                    # Add empty result to maintain index alignment
+                        id=msg_id
+                    ).execute()
+                    results.append(msg)
+                except Exception as e:
+                    logger.warning(f"Failed to get individual message {msg_id}: {e}")
                     results.append({
-                        'id': message_ids[i],
+                        'id': msg_id,
                         'payload': {'headers': []},
                         'snippet': 'Error retrieving message'
                     })
-            
-            logger.info(f"📦 Batch API retrieved {len(results)} messages in single request")
-            return results
-            
-        except Exception as e:
-            logger.error(f"Batch message retrieval failed: {e}")
-            # Fallback to individual requests
-            return await self._get_messages_individual(message_ids)
-    
-    async def _get_messages_individual(self, message_ids: List[str]) -> List[dict]:
-        """Fallback method for individual message retrieval"""
-        results = []
-        for msg_id in message_ids:
-            try:
-                msg = self.gmail_organizer.service.users().messages().get(
-                    userId='me', 
-                    id=msg_id
-                ).execute()
-                results.append(msg)
-            except Exception as e:
-                logger.warning(f"Failed to get individual message {msg_id}: {e}")
-                results.append({
-                    'id': msg_id,
-                    'payload': {'headers': []},
-                    'snippet': 'Error retrieving message'
-                })
         return results
 
     def _generate_label_color(self, category: str) -> str:
@@ -2181,10 +2163,9 @@ class EnhancedEmailLibrarianServer:
 
     async def _store_email_vector(self, email_id: str, subject: str, sender: str, 
                                 category: str, vector_id: str):
+        db = self.SessionLocal()
         """Store email vector metadata in PostgreSQL"""
         try:
-            db = self.SessionLocal()
-            
             # Check if email already exists
             existing = db.query(EmailVector).filter(EmailVector.email_id == email_id).first()
             if existing:
@@ -2316,8 +2297,8 @@ class EnhancedEmailLibrarianServer:
             logger.error(f"Crew execution {execution_id} failed: {e}")
             await self.update_agent_execution(execution_id, "failed", {"error": str(e)})
     
-    async def update_job_status(self, job_id: str, status: str, result: Any = None, error_message: Optional[str] = None):
-        """Update job status in database"""
+    async def update_job_status_stub(self, job_id: str, status: str, result: Any = None, error_message: Optional[str] = None):
+        """Stub for update job status in database (legacy, not used)"""
         # Implementation would update PostgreSQL record
         pass
     
@@ -2375,21 +2356,20 @@ class EnhancedEmailLibrarianServer:
                 job = db.query(EmailProcessingJob).filter(EmailProcessingJob.id == job_id).first()
                 if job:
                     # Use update() method for SQLAlchemy compatibility
-                    update_data = {"status": status}
+                    update_data: Dict[Any, Any] = {EmailProcessingJob.status: status}
                     
                     if result:
-                        update_data["result"] = result
+                        update_data[EmailProcessingJob.result] = json.dumps(result)
                         if "processed_count" in result:
-                            update_data["processed_count"] = result["processed_count"]
+                            update_data[EmailProcessingJob.processed_count] = result["processed_count"]
                         if "total_count" in result:
-                            update_data["total_count"] = result["total_count"]
+                            update_data[EmailProcessingJob.total_count] = result["total_count"]
                     
                     if error_message:
-                        update_data["error_message"] = error_message
+                        update_data[EmailProcessingJob.error_message] = error_message
                         
                     if status == "completed":
-                        update_data["completed_at"] = datetime.utcnow()
-                    
+                        update_data[EmailProcessingJob.completed_at] = datetime.now(timezone.utc)
                     db.query(EmailProcessingJob).filter(EmailProcessingJob.id == job_id).update(update_data)
                     db.commit()
                     logger.info(f"Updated job {job_id} status to {status}")

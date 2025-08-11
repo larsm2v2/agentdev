@@ -57,8 +57,8 @@ class MetricsCollector:
                 "status": "started"
             }
             
-            await self.redis_client.hset(f"job:{job_id}", mapping=job_data)
-            await self.redis_client.expire(f"job:{job_id}", 86400)  # 24 hour expiry
+            await self.redis_client.hset(f"job:{job_id}", mapping=job_data)  # type: ignore
+            await self.redis_client.expire(f"job:{job_id}", 86400)  # type: ignore
             
         except Exception as e:
             logger.error(f"Error recording job start: {e}")
@@ -71,7 +71,7 @@ class MetricsCollector:
         
         try:
             # Get job start data
-            job_data = await self.redis_client.hgetall(f"job:{job_id}")
+            job_data = await self.redis_client.hgetall(f"job:{job_id}")  # type: ignore
             if not job_data:
                 logger.warning(f"No start data found for job {job_id}")
                 return
@@ -94,7 +94,7 @@ class MetricsCollector:
                 "emails_per_second": emails_per_second
             }
             
-            await self.redis_client.hset(f"job:{job_id}", mapping=completion_data)
+            await self.redis_client.hset(f"job:{job_id}", mapping=completion_data)  # type: ignore
             
             # Update global statistics
             await self._update_global_stats(success_count, failure_count, categories, processing_time, email_count)
@@ -120,15 +120,15 @@ class MetricsCollector:
         
         try:
             # Update batch statistics
-            await self.redis_client.incrby("api:batch_calls", calls_made)
-            await self.redis_client.incrby("api:calls_saved", calls_saved)
-            await self.redis_client.incrby("stats:batch_emails", batch_size)
-            await self.redis_client.incr("stats:batch_count")
+            await self.redis_client.incrby("api:batch_calls", calls_made)  # type: ignore
+            await self.redis_client.incrby("api:calls_saved", calls_saved)  # type: ignore
+            await self.redis_client.incrby("stats:batch_emails", batch_size)  # type: ignore
+            await self.redis_client.incr("stats:batch_count")  # type: ignore
             
             # Update daily batch operations
             today = datetime.now().strftime("%Y-%m-%d")
-            await self.redis_client.incr(f"daily:batch_ops:{today}")
-            await self.redis_client.expire(f"daily:batch_ops:{today}", 86400 * 7)  # 7 day expiry
+            await self.redis_client.incr(f"daily:batch_ops:{today}")  # type: ignore
+            await self.redis_client.expire(f"daily:batch_ops:{today}", 86400 * 7)  # type: ignore
             
         except Exception as e:
             logger.error(f"Error recording API batch operation: {e}")
@@ -140,13 +140,13 @@ class MetricsCollector:
         
         try:
             today = datetime.now().strftime("%Y-%m-%d")
-            await self.redis_client.incr(f"daily:rate_limits:{today}")
-            await self.redis_client.expire(f"daily:rate_limits:{today}", 86400 * 7)  # 7 day expiry
+            await self.redis_client.incr(f"daily:rate_limits:{today}")  # type: ignore
+            await self.redis_client.expire(f"daily:rate_limits:{today}", 86400 * 7)  # type: ignore
             
         except Exception as e:
             logger.error(f"Error recording rate limit hit: {e}")
     
-    async def record_cache_operation(self, operation: str, hit: bool = None):
+    async def record_cache_operation(self, operation: str, hit: Optional[bool] = None):
         """Record cache operation metrics"""
         if not self.redis_client:
             return
@@ -154,13 +154,13 @@ class MetricsCollector:
         try:
             if hit is not None:
                 if hit:
-                    await self.redis_client.incr("cache:hits")
+                    await self.redis_client.incr("cache:hits")  # type: ignore
                 else:
-                    await self.redis_client.incr("cache:misses")
+                    await self.redis_client.incr("cache:misses")  # type: ignore
             
             # Set expiry for cache metrics (reset daily)
-            await self.redis_client.expire("cache:hits", 86400)
-            await self.redis_client.expire("cache:misses", 86400)
+            await self.redis_client.expire("cache:hits", 86400)  # type: ignore
+            await self.redis_client.expire("cache:misses", 86400)  # type: ignore
             
         except Exception as e:
             logger.error(f"Error recording cache operation: {e}")
@@ -170,22 +170,22 @@ class MetricsCollector:
         """Update global processing statistics"""
         try:
             # Update success/failure counts
-            await self.redis_client.incrby("stats:success_count", success_count)
-            await self.redis_client.incrby("stats:failure_count", failure_count)
-            await self.redis_client.incrby("stats:total_emails", email_count)
+            await self.redis_client.incrby("stats:success_count", success_count)  # type: ignore
+            await self.redis_client.incrby("stats:failure_count", failure_count)  # type: ignore
+            await self.redis_client.incrby("stats:total_emails", email_count)  # type: ignore
             
             # Update category statistics
             for category, count in categories.items():
-                await self.redis_client.hincrby("stats:categories", category, count)
-                await self.redis_client.incrby("stats:total_categories", count)
+                await self.redis_client.hincrby("stats:categories", category, count)  # type: ignore
+                await self.redis_client.incrby("stats:total_categories", count)  # type: ignore
             
             # Update peak performance for today
             today = datetime.now().strftime("%Y-%m-%d")
-            current_peak = await self.redis_client.get(f"daily:peak_performance:{today}")
+            current_peak = await self.redis_client.get(f"daily:peak_performance:{today}")  # type: ignore
             
             if not current_peak or processing_time < float(current_peak):
-                await self.redis_client.set(f"daily:peak_performance:{today}", processing_time)
-                await self.redis_client.expire(f"daily:peak_performance:{today}", 86400 * 7)
+                await self.redis_client.set(f"daily:peak_performance:{today}", processing_time)  # type: ignore
+                await self.redis_client.expire(f"daily:peak_performance:{today}", 86400 * 7)  # type: ignore
             
         except Exception as e:
             logger.error(f"Error updating global stats: {e}")
@@ -201,8 +201,8 @@ class MetricsCollector:
             }
             
             # Add to processing times list (keep last 100)
-            await self.redis_client.lpush("metrics:processing_times", json.dumps(time_data))
-            await self.redis_client.ltrim("metrics:processing_times", 0, 99)
+            await self.redis_client.lpush("metrics:processing_times", json.dumps(time_data))  # type: ignore
+            await self.redis_client.ltrim("metrics:processing_times", 0, 99)  # type: ignore
             
         except Exception as e:
             logger.error(f"Error recording processing time: {e}")
@@ -220,8 +220,8 @@ class MetricsCollector:
             }
             
             # Add to recent activity list (keep last 20)
-            await self.redis_client.lpush("jobs:recent_activity", json.dumps(activity_data))
-            await self.redis_client.ltrim("jobs:recent_activity", 0, 19)
+            await self.redis_client.lpush("jobs:recent_activity", json.dumps(activity_data))  # type: ignore
+            await self.redis_client.ltrim("jobs:recent_activity", 0, 19)  # type: ignore
             
         except Exception as e:
             logger.error(f"Error adding to recent activity: {e}")
@@ -232,8 +232,8 @@ class MetricsCollector:
             today = datetime.now().strftime("%Y-%m-%d")
             
             # Update daily email count
-            await self.redis_client.incrby(f"daily:emails:{today}", email_count)
-            await self.redis_client.expire(f"daily:emails:{today}", 86400 * 7)  # 7 day expiry
+            await self.redis_client.incrby(f"daily:emails:{today}", email_count)  # type: ignore
+            await self.redis_client.expire(f"daily:emails:{today}", 86400 * 7)  # type: ignore
             
         except Exception as e:
             logger.error(f"Error updating daily metrics: {e}")

@@ -46,8 +46,11 @@ class MetricsDashboard:
                 socket_keepalive=True,
                 health_check_interval=30
             )
-            await self.redis_client.ping()
-            logger.info("✅ Metrics Dashboard Redis connection established")
+            if self.redis_client is not None:
+                await self.redis_client.ping()
+                logger.info("✅ Metrics Dashboard Redis connection established")
+            else:
+                logger.warning("⚠️ Redis client is None after from_url")
         except Exception as e:
             logger.warning(f"⚠️ Redis unavailable for metrics: {e}")
             self.redis_client = None
@@ -98,11 +101,11 @@ class MetricsDashboard:
         
         try:
             # Get processing times from last 24 hours
-            processing_times = await self.redis_client.lrange("metrics:processing_times", 0, -1)
-            processing_data = [json.loads(pt) for pt in processing_times] if processing_times else []
+            processing_times_raw = await self.redis_client.lrange("metrics:processing_times", 0, -1)  # type: ignore
+            processing_times = [json.loads(pt) for pt in processing_times_raw] if processing_times_raw else []
             
             # Calculate averages and trends
-            recent_times = [p["duration"] for p in processing_data if 
+            recent_times = [p["duration"] for p in processing_times if 
                           datetime.fromisoformat(p["timestamp"]) > datetime.now() - timedelta(hours=24)]
             
             avg_processing_time = sum(recent_times) / len(recent_times) if recent_times else 0
@@ -209,10 +212,10 @@ class MetricsDashboard:
         
         try:
             # Get last 10 job activities
-            recent_activities = await self.redis_client.lrange("jobs:recent_activity", 0, 9)
+            recent_activities_raw = await self.redis_client.lrange("jobs:recent_activity", 0, 9)  # type: ignore
             activities = []
             
-            for activity in recent_activities:
+            for activity in recent_activities_raw:
                 job_data = json.loads(activity)
                 activities.append({
                     "job_id": job_data.get("job_id", "unknown"),
@@ -236,8 +239,8 @@ class MetricsDashboard:
         
         try:
             # Check cache sizes and status
-            label_cache_size = await self.redis_client.hlen("gmail:labels")
-            session_cache_size = await self.redis_client.dbsize()
+            label_cache_size = await self.redis_client.hlen("gmail:labels")  # type: ignore
+            session_cache_size = await self.redis_client.dbsize()  # type: ignore
             
             # Get cache hit rates
             cache_hits = await self.redis_client.get("cache:hits") or "0"
@@ -266,10 +269,10 @@ class MetricsDashboard:
         
         try:
             hour_ago = (datetime.now() - timedelta(hours=1)).isoformat()
-            processing_times = await self.redis_client.lrange("metrics:processing_times", 0, -1)
+            processing_times_raw = await self.redis_client.lrange("metrics:processing_times", 0, -1)  # type: ignore
             
             recent_count = 0
-            for pt in processing_times:
+            for pt in processing_times_raw:
                 data = json.loads(pt)
                 if data["timestamp"] > hour_ago:
                     recent_count += data.get("emails_count", 1)
@@ -296,12 +299,12 @@ class MetricsDashboard:
             return "unknown"
         
         try:
-            processing_times = await self.redis_client.lrange("metrics:processing_times", 0, 19)  # Last 20
-            if len(processing_times) < 10:
+            processing_times_raw = await self.redis_client.lrange("metrics:processing_times", 0, 19)  # type: ignore # Last 20
+            if len(processing_times_raw) < 10:
                 return "insufficient_data"
             
-            recent_avg = sum(json.loads(pt)["duration"] for pt in processing_times[:10]) / 10
-            older_avg = sum(json.loads(pt)["duration"] for pt in processing_times[10:]) / len(processing_times[10:])
+            recent_avg = sum(json.loads(pt)["duration"] for pt in processing_times_raw[:10]) / 10
+            older_avg = sum(json.loads(pt)["duration"] for pt in processing_times_raw[10:]) / len(processing_times_raw[10:])
             
             if recent_avg < older_avg * 0.9:
                 return "improving"
@@ -440,8 +443,8 @@ class MetricsDashboard:
             return {}
         
         try:
-            categories = await self.redis_client.hgetall("stats:categories")
-            return {k: int(v) for k, v in categories.items()} if categories else {}
+            categories_raw = await self.redis_client.hgetall("stats:categories")  # type: ignore
+            return {k: int(v) for k, v in categories_raw.items()} if categories_raw else {}
         except:
             return {}
     

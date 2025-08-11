@@ -29,7 +29,6 @@ services:
       timeout: 10s
       retries: 3
         "--reload",
-      ]
 
   # Redis Cache and Analytics
   redis:

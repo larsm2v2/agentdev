@@ -73,6 +73,10 @@ class RedisCacheManager:
     
     async def get_label_cache(self) -> Dict[str, str]:
         """Load Gmail label cache from Redis"""
+        if not self.redis_client:
+            logger.warning("Redis client not initialized")
+            return {}
+            
         try:
             cache_data = await self.redis_client.get(self.LABEL_CACHE_KEY)
             if cache_data:
@@ -90,6 +94,10 @@ class RedisCacheManager:
     async def update_label_cache(self, labels: Dict[str, str]) -> bool:
         """Update Gmail label cache in Redis with TTL"""
         try:
+            if not self.redis_client:
+                logger.error("Redis client is not initialized. Call 'initialize()' before using cache methods.")
+                return False
+
             await self.redis_client.setex(
                 self.LABEL_CACHE_KEY,
                 self.label_cache_ttl,
@@ -139,6 +147,9 @@ class RedisCacheManager:
     async def cache_email_processing_stats(self, job_id: str, stats: Dict[str, Any]) -> bool:
         """Cache email processing statistics for analytics"""
         try:
+            if not self.redis_client:
+                return False
+                
             key = f"{self.STATS_PREFIX}:{job_id}"
             
             # Add timestamp to stats
@@ -161,6 +172,18 @@ class RedisCacheManager:
     async def get_processing_analytics(self, days: int = 7) -> Dict[str, Any]:
         """Get comprehensive processing analytics from cached data"""
         try:
+            if not self.redis_client:
+                return {
+                    "total_jobs": 0,
+                    "total_emails_processed": 0,
+                    "total_vectors_stored": 0,
+                    "total_labels_applied": 0,
+                    "categories_discovered": set(),
+                    "average_processing_time": 0,
+                    "success_rate": 0,
+                    "daily_breakdown": {}
+                }
+                
             # Get all stats keys
             pattern = f"{self.STATS_PREFIX}:*"
             keys = await self.redis_client.keys(pattern)
@@ -199,6 +222,7 @@ class RedisCacheManager:
                         stats = json.loads(stats_json)
                         
                         # Filter by date if timestamp available
+                        cached_time = None
                         if 'cached_at' in stats:
                             cached_time = datetime.fromisoformat(stats['cached_at'])
                             if cached_time < cutoff_date:
@@ -219,7 +243,7 @@ class RedisCacheManager:
                             analytics["processing_times"].append(stats["processing_time"])
                         
                         # Daily breakdown
-                        if 'cached_at' in stats:
+                        if cached_time is not None:
                             date_key = cached_time.strftime("%Y-%m-%d")
                             if date_key not in analytics["daily_breakdown"]:
                                 analytics["daily_breakdown"][date_key] = {
@@ -263,6 +287,9 @@ class RedisCacheManager:
     async def cache_session_data(self, session_id: str, data: Dict[str, Any]) -> bool:
         """Cache session data for user preferences and state"""
         try:
+            if not self.redis_client:
+                return False
+                
             key = f"{self.SESSION_PREFIX}:{session_id}"
             
             # Add metadata
@@ -285,6 +312,9 @@ class RedisCacheManager:
     async def get_session_data(self, session_id: str) -> Optional[Dict[str, Any]]:
         """Retrieve session data from cache"""
         try:
+            if not self.redis_client:
+                return None
+                
             key = f"{self.SESSION_PREFIX}:{session_id}"
             data = await self.redis_client.get(key)
             
@@ -300,6 +330,9 @@ class RedisCacheManager:
     async def extend_session(self, session_id: str) -> bool:
         """Extend session expiration time"""
         try:
+            if not self.redis_client:
+                return False
+                
             key = f"{self.SESSION_PREFIX}:{session_id}"
             return await self.redis_client.expire(key, self.session_cache_ttl)
             
@@ -312,6 +345,9 @@ class RedisCacheManager:
     async def cache_performance_metrics(self, metrics: Dict[str, Any]) -> bool:
         """Cache real-time performance metrics"""
         try:
+            if not self.redis_client:
+                return False
+                
             key = f"{self.ANALYTICS_PREFIX}:metrics:{datetime.utcnow().strftime('%Y%m%d_%H%M')}"
             
             await self.redis_client.setex(
@@ -329,6 +365,9 @@ class RedisCacheManager:
     async def get_recent_performance_metrics(self, hours: int = 2) -> List[Dict[str, Any]]:
         """Get recent performance metrics for dashboard"""
         try:
+            if not self.redis_client:
+                return []
+                
             # Generate time-based keys for the last N hours
             metrics = []
             current_time = datetime.utcnow()
@@ -361,6 +400,13 @@ class RedisCacheManager:
     async def health_check(self) -> Dict[str, Any]:
         """Perform comprehensive Redis health check"""
         try:
+            if not self.redis_client:
+                return {
+                    "status": "unhealthy",
+                    "error": "Redis client not initialized",
+                    "timestamp": datetime.utcnow().isoformat()
+                }
+                
             start_time = datetime.utcnow()
             
             # Basic connectivity
@@ -396,6 +442,9 @@ class RedisCacheManager:
     async def cleanup_expired_keys(self) -> int:
         """Clean up expired keys and perform maintenance"""
         try:
+            if not self.redis_client:
+                return 0
+                
             # Get keys that should be cleaned up
             patterns = [
                 f"{self.STATS_PREFIX}:*",
