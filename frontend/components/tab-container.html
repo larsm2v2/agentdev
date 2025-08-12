@@ -2,12 +2,16 @@
 <div
   class="bg-white rounded-lg shadow-md tab-content"
   x-show="showTab"
-  x-transition:enter="transition ease-out duration-300"
-  x-transition:enter-start="opacity-0 transform scale-95"
-  x-transition:enter-end="opacity-100 transform scale-100"
+  x-transition:enter="transition ease-out duration-200"
+  x-transition:enter-start="opacity-0"
+  x-transition:enter-end="opacity-100"
+  style="min-height: 400px; overflow: hidden"
 >
-  <div id="shelving-tab-container"></div>
-  <div id="cataloging-tab-container"></div>
-  <div id="reclassification-tab-container"></div>
-  <div id="workflows-tab-container"></div>
+  <div id="shelving-tab-container" x-show="showTab === 'shelving'"></div>
+  <div id="cataloging-tab-container" x-show="showTab === 'cataloging'"></div>
+  <div
+    id="reclassification-tab-container"
+    x-show="showTab === 'reclassification'"
+  ></div>
+  <div id="workflows-tab-container" x-show="showTab === 'workflows'"></div>
 </div>

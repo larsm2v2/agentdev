@@ -1,5 +1,61 @@
 /* Email Librarian - Enhanced Styling */
 
+/* Fix horizontal scrollbar flicker issue */
+html,
+body {
+  overflow-x: hidden;
+  max-width: 100vw;
+  box-sizing: border-box;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+/* Prevent content from causing horizontal overflow */
+.max-w-7xl {
+  max-width: calc(100vw - 2rem);
+  overflow-x: hidden;
+}
+
+/* Stabilize grid layouts to prevent shifting */
+.grid {
+  overflow-x: hidden;
+}
+
+/* Ensure cards don't cause overflow */
+.function-card,
+.stats-card {
+  min-width: 0; /* Allow cards to shrink properly */
+  word-wrap: break-word;
+  contain: layout style; /* Optimize rendering performance */
+}
+
+/* Prevent animation-induced layout shifts */
+.function-card::before {
+  will-change: transform; /* Optimize transform animations */
+  contain: layout;
+}
+
+/* Stabilize slider animations */
+.slider::before {
+  will-change: transform;
+}
+
+/* Prevent Alpine.js transition layout shifts */
+[x-show] {
+  transition: opacity 0.2s ease;
+}
+
+/* Stabilize tab content to prevent layout jumps */
+.tab-content {
+  contain: layout style;
+  min-height: 400px;
+  overflow: hidden;
+}
+
 /* Custom animations */
 @keyframes slideInUp {
   from {
@@ -35,6 +91,7 @@
 .librarian-gradient {
   background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
   position: relative;
+  overflow: hidden; /* Contain the shimmer animation */
 }
 
 .librarian-gradient::before {

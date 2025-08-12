@@ -32,7 +32,7 @@ services:
       - QDRANT_HOST=qdrant
       - QDRANT_PORT=6333
       - N8N_BASE_URL=http://n8n:5678
-      - REDIS_URL=redis://redis:6379/0
+      - REDIS_URL=redis://:redis_password_2024@redis:6379/0
       - LANGFUSE_HOST=https://cloud.langfuse.com
       - LOG_LEVEL=INFO
       # Gmail credentials paths (files mounted via volumes)
@@ -118,6 +118,9 @@ services:
       - WEBHOOK_URL=http://localhost:5678/
       - GENERIC_TIMEZONE=UTC
       - N8N_SECURE_COOKIE=false
+      - N8N_LOG_LEVEL=debug
+      - N8N_DEFAULT_BINARY_DATA_MODE=filesystem
+      - N8N_DIAGNOSTICS_ENABLED=false
     volumes:
       - n8n_data:/home/node/.n8n
       - ./n8n/workflows:/home/node/.n8n/workflows
@@ -134,9 +137,11 @@ services:
           "--spider",
           "http://localhost:5678/healthz",
         ]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+    restart: unless-stopped
     networks:
       - email_librarian_network
 

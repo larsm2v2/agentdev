@@ -18,7 +18,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, BackgroundTasks, Depends
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, HTMLResponse, PlainTextResponse
+from fastapi.responses import JSONResponse, HTMLResponse, PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 import uvicorn
@@ -447,6 +447,55 @@ class EnhancedEmailLibrarianServer:
                 }
             }
         
+        # System info route (alternative to root functionality)
+        @self.app.get("/system-info", response_class=HTMLResponse)
+        async def system_info():
+            """Serve system information and API overview"""
+            return HTMLResponse(content="""
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <title>Email Librarian - System Info</title>
+                <style>
+                    body { font-family: Arial, sans-serif; margin: 40px; background: #f5f5f5; }
+                    .container { max-width: 800px; margin: 0 auto; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+                    h1 { color: #2563eb; margin-bottom: 20px; }
+                    h2 { color: #374151; border-bottom: 2px solid #e5e7eb; padding-bottom: 10px; margin-top: 30px; }
+                    ul { list-style-type: none; padding: 0; }
+                    li { padding: 8px 0; border-bottom: 1px solid #f3f4f6; }
+                    a { color: #2563eb; text-decoration: none; }
+                    a:hover { text-decoration: underline; }
+                    .status { background: #dcfce7; color: #166534; padding: 4px 8px; border-radius: 4px; font-size: 12px; }
+                </style>
+            </head>
+            <body>
+                <div class="container">
+                    <h1>🤖 Enhanced Email Librarian - System Information</h1>
+                    <p><span class="status">ONLINE</span> System is operational</p>
+                    
+                    <h2>🔗 Quick Navigation</h2>
+                    <ul>
+                        <li><a href="/">🏠 Home</a> - Redirects to main dashboard</li>
+                        <li><a href="/main.html">📊 Main Dashboard</a> - Primary interface</li>
+                        <li><a href="/health">💚 Health Check</a> - System status</li>
+                        <li><a href="/docs">📚 API Documentation</a> - Interactive API docs</li>
+                        <li><a href="/metrics">📈 Prometheus Metrics</a> - Raw metrics data</li>
+                    </ul>
+                    
+                    <h2>🚀 Integrated Services</h2>
+                    <ul>
+                        <li>📧 Gmail API Integration</li>
+                        <li>🤖 CrewAI Agent System</li>
+                        <li>🔄 n8n Workflow Automation</li>
+                        <li>🔍 Qdrant Vector Search</li>
+                        <li>⚡ Redis Caching</li>
+                        <li>📡 WebSocket Support</li>
+                    </ul>
+                </div>
+            </body>
+            </html>
+            """)
+        
         # Redis analytics endpoints
         @self.app.get("/api/analytics/overview")
         async def get_analytics_overview():
@@ -657,32 +706,6 @@ class EnhancedEmailLibrarianServer:
             except Exception as e:
                 logger.error(f"Metrics endpoint error: {e}")
                 return "email_librarian_service_status 0"
-        
-        # Root route - serve dashboard
-        @self.app.get("/", response_class=HTMLResponse)
-        async def dashboard():
-            """Serve the main dashboard"""
-            import os
-            frontend_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "frontend")
-            index_file = os.path.join(frontend_path, "index.html")
-            
-            if os.path.exists(index_file):
-                with open(index_file, 'r', encoding='utf-8') as f:
-                    return HTMLResponse(content=f.read())
-            else:
-                return HTMLResponse(content="""
-                <html>
-                <head><title>Email Librarian</title></head>
-                <body>
-                    <h1>🤖 Email Librarian API</h1>
-                    <p>Server is running! Dashboard not found.</p>
-                    <ul>
-                        <li><a href="/health">Health Check</a></li>
-                        <li><a href="/docs">API Documentation</a></li>
-                    </ul>
-                </body>
-                </html>
-                """)
         
         # Modular frontend route
         @self.app.get("/main.html", response_class=HTMLResponse)
@@ -1189,6 +1212,210 @@ class EnhancedEmailLibrarianServer:
             except Exception as e:
                 logger.error(f"n8n workflow trigger failed: {e}")
                 raise HTTPException(status_code=500, detail=str(e))
+
+        # Function Control Endpoints for Dashboard Integration
+        @self.app.post("/api/functions/shelving/start")
+        async def start_shelving_function(background_tasks: BackgroundTasks, db: Session = Depends(self.get_db)):
+            """Start real-time email shelving function"""
+            try:
+                logger.info("Starting shelving function from dashboard")
+                
+                # Create a shelving job configuration
+                job_config = JobConfig(
+                    job_type="shelving",
+                    parameters={
+                        "max_emails": 50,
+                        "batch_size": 10,
+                        "continuous_monitoring": True,
+                        "real_time": True
+                    }
+                )
+                
+                # Create job record
+                job_id = str(uuid.uuid4())
+                db_job = EmailProcessingJob(
+                    id=job_id,
+                    job_type="shelving",
+                    config=job_config.parameters,
+                    status="running"
+                )
+                db.add(db_job)
+                db.commit()
+                
+                # Start background processing
+                background_tasks.add_task(self.start_continuous_shelving, job_id)
+                
+                # Store the active shelving job ID for stopping later
+                self.active_shelving_job_id = job_id
+                
+                return {
+                    "status": "success",
+                    "message": "Shelving function started",
+                    "job_id": job_id
+                }
+                
+            except Exception as e:
+                logger.error(f"Failed to start shelving function: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @self.app.post("/api/functions/shelving/stop")
+        async def stop_shelving_function(db: Session = Depends(self.get_db)):
+            """Stop real-time email shelving function"""
+            try:
+                logger.info("Stopping shelving function from dashboard")
+                
+                # Stop the active shelving job
+                if hasattr(self, 'active_shelving_job_id') and self.active_shelving_job_id:
+                    await self.update_job_status(self.active_shelving_job_id, "stopped")
+                    self.shelving_active = False
+                    self.active_shelving_job_id = None
+                
+                return {
+                    "status": "success",
+                    "message": "Shelving function stopped"
+                }
+                
+            except Exception as e:
+                logger.error(f"Failed to stop shelving function: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @self.app.get("/api/functions/shelving/status")
+        async def get_shelving_status():
+            """Get current shelving function status"""
+            try:
+                is_active = getattr(self, 'shelving_active', False)
+                job_id = getattr(self, 'active_shelving_job_id', None)
+                
+                return {
+                    "active": is_active,
+                    "job_id": job_id,
+                    "status": "running" if is_active else "stopped"
+                }
+                
+            except Exception as e:
+                logger.error(f"Failed to get shelving status: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @self.app.get("/api/functions/shelving/activity")
+        async def get_shelving_activity():
+            """Get recent shelving activity for dashboard updates"""
+            try:
+                # Get recent activity from Redis cache if available
+                if self._redis_enabled and self.cache_manager:
+                    analytics = await self.cache_manager.get_processing_analytics(days=1)
+                    recent_jobs = analytics.get("recent_jobs", [])
+                    
+                    # Format activity for dashboard
+                    activity = []
+                    for job in recent_jobs[-10:]:  # Last 10 activities
+                        activity.append({
+                            "id": job.get("id", str(uuid.uuid4())),
+                            "action": self.format_activity_message(job),
+                            "timestamp": job.get("timestamp", "just now")
+                        })
+                    
+                    return {
+                        "status": "success",
+                        "activity": activity
+                    }
+                else:
+                    # Return empty if no cache available
+                    return {
+                        "status": "success",
+                        "activity": []
+                    }
+                    
+            except Exception as e:
+                logger.error(f"Failed to get shelving activity: {e}")
+                return {
+                    "status": "error", 
+                    "error": str(e),
+                    "activity": []
+                }
+
+        @self.app.post("/api/functions/cataloging/start")
+        async def start_cataloging_function(
+            start_date: str = ,
+            end_date: str = None,
+            batch_size: int = 50,
+            background_tasks: BackgroundTasks = BackgroundTasks(),
+            db: Session = Depends(self.get_db)
+        ):
+            """Start email cataloging function"""
+            try:
+                logger.info("Starting cataloging function from dashboard")
+                
+                job_config = JobConfig(
+                    job_type="cataloging",
+                    parameters={
+                        "start_date": start_date,
+                        "end_date": end_date,
+                        "batch_size": batch_size,
+                        "max_emails": 1000
+                    }
+                )
+                
+                job_id = str(uuid.uuid4())
+                db_job = EmailProcessingJob(
+                    id=job_id,
+                    job_type="cataloging",
+                    config=job_config.parameters
+                )
+                db.add(db_job)
+                db.commit()
+                
+                background_tasks.add_task(self.process_job, job_id, job_config)
+                
+                return {
+                    "status": "success",
+                    "message": "Cataloging function started",
+                    "job_id": job_id
+                }
+                
+            except Exception as e:
+                logger.error(f"Failed to start cataloging function: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @self.app.post("/api/functions/reclassification/start")
+        async def start_reclassification_function(
+            source_label: str,
+            target_categories: List[str],
+            background_tasks: BackgroundTasks = BackgroundTasks(),
+            db: Session = Depends(self.get_db)
+        ):
+            """Start email reclassification function"""
+            try:
+                logger.info("Starting reclassification function from dashboard")
+                
+                job_config = JobConfig(
+                    job_type="reclassification",
+                    parameters={
+                        "source_label": source_label,
+                        "target_categories": target_categories,
+                        "max_emails": 500
+                    }
+                )
+                
+                job_id = str(uuid.uuid4())
+                db_job = EmailProcessingJob(
+                    id=job_id,
+                    job_type="reclassification",
+                    config=job_config.parameters
+                )
+                db.add(db_job)
+                db.commit()
+                
+                background_tasks.add_task(self.process_job, job_id, job_config)
+                
+                return {
+                    "status": "success",
+                    "message": "Reclassification function started",
+                    "job_id": job_id
+                }
+                
+            except Exception as e:
+                logger.error(f"Failed to start reclassification function: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
         
         # WebSocket for real-time updates
         @self.app.websocket("/ws/librarian")
@@ -1272,21 +1499,57 @@ class EnhancedEmailLibrarianServer:
             # Ensure Gmail organizer is initialized
             if not hasattr(self, 'gmail_organizer') or not self.gmail_organizer:
                 # Initialize Gmail organizer
+                logger.info("🔧 Initializing Gmail organizer for shelving job...")
                 credentials_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "config", "credentials.json")
                 token_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "data", "gmail_token.pickle")
                 
+                logger.info(f"📁 Credentials path: {credentials_path}")
+                logger.info(f"🔑 Token path: {token_path}")
+                
                 try:
                     self.gmail_organizer = GmailAIOrganizer(credentials_file=credentials_path)
+                    logger.info("✅ GmailAIOrganizer instance created")
+                    
                     if os.path.exists(token_path):
                         self.gmail_organizer.token_file = token_path
+                        logger.info("✅ Token file path set")
+                    else:
+                        logger.warning("⚠️ Token file not found at expected path")
                     
                     if not self.gmail_organizer.service:
+                        logger.info("🔐 Gmail service not initialized, attempting authentication...")
                         auth_success = self.gmail_organizer.authenticate()
                         if not auth_success:
+                            logger.error("❌ Gmail authentication failed")
                             raise Exception("Gmail authentication failed")
+                        else:
+                            logger.info("✅ Gmail authentication successful")
+                    else:
+                        logger.info("✅ Gmail service already initialized")
+                        
                 except Exception as e:
+                    logger.error(f"❌ Failed to initialize Gmail organizer: {e}")
                     raise Exception(f"Failed to initialize Gmail organizer: {e}")
+            else:
+                logger.info("✅ Gmail organizer already available")
             
+            # Test Gmail service connectivity
+            if self.gmail_organizer and self.gmail_organizer.service:
+                try:
+                    logger.info("🔍 Testing Gmail service connectivity...")
+                    profile = self.gmail_organizer.service.users().getProfile(userId='me').execute()
+                    email_address = profile.get('emailAddress', 'Unknown')
+                    logger.info(f"✅ Gmail service connected successfully - Email: {email_address}")
+                    
+                    # Test label access
+                    labels_test = self.gmail_organizer.service.users().labels().list(userId='me').execute()
+                    label_count = len(labels_test.get('labels', []))
+                    logger.info(f"✅ Gmail labels accessible - Found {label_count} existing labels")
+                    
+                except Exception as e:
+                    logger.error(f"❌ Gmail service test failed: {e}")
+                    raise Exception(f"Gmail service not properly connected: {e}")
+                
             # Get parameters with defaults
             batch_size = parameters.get('batch_size', 20)
             max_emails = parameters.get('max_emails', 100)
@@ -1527,24 +1790,47 @@ class EnhancedEmailLibrarianServer:
     async def _apply_gmail_label(self, message_id: str, category: str):
         """Apply Gmail label to email with caching optimization"""
         try:
+            logger.info(f"🏷️ Starting label application - Email: {message_id}, Category: '{category}'")
+            
             # Get or create label (with caching)
+            logger.info(f"🔍 Getting or creating Gmail label for category: '{category}'")
             label_id = await self._get_or_create_gmail_label_cached(category)
+            logger.info(f"✅ Label ID retrieved: {label_id}")
             
             # Apply label to message
             if self.gmail_organizer and self.gmail_organizer.service:
-                self.gmail_organizer.service.users().messages().modify(
+                logger.info(f"📧 Applying label '{category}' (ID: {label_id}) to message {message_id}")
+                
+                modify_request = {
+                    'addLabelIds': [label_id],
+                    'removeLabelIds': []  # Keep in inbox for now
+                }
+                logger.info(f"🔧 Gmail modify request: {modify_request}")
+                
+                result = self.gmail_organizer.service.users().messages().modify(
                     userId='me',
                     id=message_id,
-                    body={
-                        'addLabelIds': [label_id],
-                        'removeLabelIds': []  # Keep in inbox for now
-                    }
+                    body=modify_request
                 ).execute()
                 
-                logger.info(f"Applied label '{category}' to message {message_id}")
+                logger.info(f"✅ Successfully applied label '{category}' to message {message_id}")
+                logger.info(f"📊 Gmail API response: {result.get('labelIds', [])}")
+                
+                # Verify the label was applied
+                updated_labels = result.get('labelIds', [])
+                if label_id in updated_labels:
+                    logger.info(f"✅ Label verification successful - '{category}' is now on email {message_id}")
+                else:
+                    logger.warning(f"⚠️ Label verification failed - '{category}' not found in updated labels: {updated_labels}")
+                    
+            else:
+                logger.error(f"❌ Gmail organizer or service not available for label application")
+                raise Exception("Gmail service not available")
             
         except Exception as e:
-            logger.error(f"Failed to apply label '{category}' to {message_id}: {e}")
+            logger.error(f"❌ Failed to apply label '{category}' to {message_id}: {e}")
+            logger.error(f"💥 Label application error details: {type(e).__name__}: {str(e)}")
+            raise
 
     async def _apply_labels_batch(self, email_categories: List[Tuple[str, str]]) -> int:
         """Apply labels to multiple emails concurrently for maximum efficiency"""
@@ -2377,6 +2663,141 @@ class EnhancedEmailLibrarianServer:
                 db.close()
         except Exception as e:
             logger.error(f"Failed to update job status: {e}")
+
+    async def start_continuous_shelving(self, job_id: str):
+        """Start continuous email shelving process"""
+        logger.info(f"🚀 Starting continuous shelving process for job {job_id}")
+        self.shelving_active = True
+        
+        try:
+            # Check Gmail API authentication first
+            if not hasattr(self, 'gmail_organizer') or not self.gmail_organizer:
+                logger.error("❌ Gmail organizer not initialized - cannot start shelving")
+                return
+                
+            logger.info(f"✅ Gmail organizer available: {type(self.gmail_organizer)}")
+            
+            # Test Gmail API connection
+            try:
+                if hasattr(self.gmail_organizer, 'service') and self.gmail_organizer.service:
+                    profile = self.gmail_organizer.service.users().getProfile(userId='me').execute()
+                    logger.info(f"✅ Gmail API connected for user: {profile.get('emailAddress', 'unknown')}")
+                else:
+                    logger.error("❌ Gmail service not available")
+                    return
+            except Exception as e:
+                logger.error(f"❌ Gmail API connection failed: {e}")
+                return
+            
+            cycle_count = 0
+            while self.shelving_active:
+                cycle_count += 1
+                logger.info(f"🔄 Shelving cycle #{cycle_count} - checking for new emails...")
+                
+                # Check for new emails every 30 seconds
+                await asyncio.sleep(30)
+                
+                if not self.shelving_active:
+                    logger.info("🛑 Shelving stopped by user")
+                    break
+                    
+                try:
+                    # Get unread emails from inbox
+                    logger.info("📧 Fetching unread emails from inbox...")
+                    
+                    query = "in:inbox is:unread"
+                    logger.info(f"🔍 Gmail query: {query}")
+                    
+                    # Use Gmail API to search for emails
+                    search_result = self.gmail_organizer.service.users().messages().list(
+                        userId='me',
+                        q=query,
+                        maxResults=10
+                    ).execute()
+                    
+                    messages = search_result.get('messages', [])
+                    logger.info(f"📬 Found {len(messages)} unread emails")
+                    
+                    if len(messages) == 0:
+                        logger.info("✅ No new emails to process")
+                        continue
+                    
+                    # Process each message
+                    for i, msg in enumerate(messages):
+                        logger.info(f"📄 Processing email {i+1}/{len(messages)}: {msg['id']}")
+                        
+                        try:
+                            # Get full message details
+                            full_message = self.gmail_organizer.service.users().messages().get(
+                                userId='me',
+                                id=msg['id'],
+                                format='full'
+                            ).execute()
+                            
+                            # Extract subject and sender
+                            headers = full_message['payload'].get('headers', [])
+                            subject = next((h['value'] for h in headers if h['name'] == 'Subject'), 'No Subject')
+                            sender = next((h['value'] for h in headers if h['name'] == 'From'), 'Unknown Sender')
+                            
+                            logger.info(f"📧 Email details - Subject: '{subject}', From: '{sender}'")
+                            
+                            # Create a mini shelving job for this email
+                            mini_job_config = JobConfig(
+                                job_type="shelving",
+                                parameters={
+                                    "max_emails": 1,
+                                    "batch_size": 1,
+                                    "message_ids": [msg['id']],
+                                    "enable_logging": True
+                                }
+                            )
+                            
+                            # Process the email
+                            logger.info(f"🤖 Starting AI processing for email {msg['id']}")
+                            batch_job_id = f"{job_id}_email_{msg['id']}"
+                            await self.process_job(batch_job_id, mini_job_config)
+                            logger.info(f"✅ Completed processing email {msg['id']}")
+                            
+                        except Exception as e:
+                            logger.error(f"❌ Failed to process email {msg['id']}: {e}")
+                            continue
+                    
+                    logger.info(f"🎯 Completed shelving cycle #{cycle_count} - processed {len(messages)} emails")
+                    
+                except Exception as e:
+                    logger.error(f"❌ Error in shelving cycle #{cycle_count}: {e}")
+                    
+        except Exception as e:
+            logger.error(f"❌ Critical error in continuous shelving: {e}")
+        finally:
+            self.shelving_active = False
+            await self.update_job_status(job_id, "completed")
+            logger.info(f"🏁 Continuous shelving stopped for job {job_id}")
+
+    def format_activity_message(self, job_data: Dict) -> str:
+        """Format job data into user-friendly activity message"""
+        try:
+            job_type = job_data.get("type", "unknown")
+            processed_count = job_data.get("processed_count", 0)
+            categories = job_data.get("categories", [])
+            
+            if job_type == "shelving":
+                if categories:
+                    cat_list = ", ".join(categories[:3])  # Show first 3 categories
+                    return f"Processed {processed_count} emails into [{cat_list}] categories"
+                else:
+                    return f"Processed {processed_count} new emails"
+            elif job_type == "archiving":
+                folder = job_data.get("folder", "Archive")
+                return f"Archived {processed_count} emails to {folder} folder"
+            elif job_type == "inbox_clear":
+                return f"Inbox is clear - all {processed_count} emails organized"
+            else:
+                return f"Processed {processed_count} emails"
+                
+        except Exception as e:
+            logger.warning(f"Error formatting activity message: {e}")
+            return "Email processing completed"
 
 def main():
     """Main entry point"""

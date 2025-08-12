@@ -14,12 +14,85 @@
       rel="stylesheet"
       href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css"
     />
-    <link rel="stylesheet" href="email_librarian.css" />
+    <link rel="stylesheet" href="styles/email_librarian.css" />
+    <style>
+      /* Critical CSS to prevent layout reflow loops */
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        overflow-x: hidden;
+        width: 100%;
+        max-width: 100vw;
+      }
+
+      /* Prevent Alpine.js from causing layout shifts */
+      [x-cloak] {
+        display: none !important;
+      }
+
+      /* Stabilize grid layouts */
+      .grid {
+        overflow: hidden;
+        contain: layout;
+      }
+
+      /* Prevent cards from causing reflows */
+      .function-card,
+      .stats-card {
+        will-change: transform;
+        contain: layout style;
+        backface-visibility: hidden;
+        transform: translateZ(0);
+      }
+
+      /* Stabilize tab content */
+      .tab-content {
+        contain: layout style;
+        transform: translateZ(0);
+      }
+
+      /* Optimize animations */
+      .slider::before,
+      .progress-bar-fill {
+        will-change: transform, width;
+        contain: layout;
+      }
+
+      /* Main container constraints */
+      .max-w-7xl {
+        max-width: min(80rem, calc(100vw - 2rem));
+        overflow-x: hidden;
+      }
+
+      /* Prevent content overflow on smaller screens */
+      @media (max-width: 1024px) {
+        .lg\\:grid-cols-4 {
+          grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+        }
+      }
+
+      @media (max-width: 768px) {
+        .md\\:grid-cols-2,
+        .md\\:grid-cols-4 {
+          grid-template-columns: repeat(1, minmax(0, 1fr)) !important;
+        }
+      }
+
+      /* Stabilize progress bars */
+      .progress-bar-fill {
+        transition: width 0.3s ease;
+        contain: layout style;
+      }
+    </style>
   </head>
   <body class="bg-gray-50 min-h-screen">
     <div
-      x-data="enhancedEmailLibrarianApp()"
+      x-data="emailLibrarianApp()"
       x-init="init()"
+      x-cloak
       class="min-h-screen"
     >
       <!-- Connection Status Indicator -->
@@ -122,7 +195,11 @@
 
       <!-- Main Functions Panel -->
       <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+        <!-- Main Functions Panel -->
+        <div
+          class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8"
+          style="min-height: 280px"
+        >
           <!-- Shelving Function -->
           <div
             class="function-card shelving bg-white rounded-lg shadow-md p-6"
@@ -379,7 +456,10 @@
           </div>
         </div>
         <!-- Statistics Overview -->
-        <div class="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
+        <div
+          class="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8"
+          style="min-height: 120px"
+        >
           <div class="stats-card text-white rounded-lg p-6">
             <div class="flex items-center justify-between">
               <div>
@@ -434,9 +514,7 @@
         <div
           class="bg-white rounded-lg shadow-md tab-content"
           x-show="showTab"
-          x-transition:enter="transition ease-out duration-300"
-          x-transition:enter-start="opacity-0 transform scale-95"
-          x-transition:enter-end="opacity-100 transform scale-100"
+          style="min-height: 400px; overflow: hidden; transform: translateZ(0)"
         >
           <!-- Shelving Tab -->
           <div x-show="showTab === 'shelving'" class="p-6">
@@ -891,6 +969,10 @@
       function emailLibrarianApp() {
         return {
           showTab: "workflows",
+          notifications: [],
+          isLoading: false,
+          connectionStatus: "connected",
+          activityPollingInterval: null,
           functions: {
             shelving: {
               enabled: false,
@@ -904,18 +986,30 @@
               recentActivity: [
                 {
                   id: 1,
-                  action: "Processed 15 new emails",
+                  action:
+                    "Processed 15 emails into [Work, Personal, Newsletters] categories",
                   timestamp: "2 minutes ago",
                 },
                 {
                   id: 2,
-                  action: "Applied 12 categories",
+                  action: "Archived 8 promotional emails to Marketing folder",
                   timestamp: "5 minutes ago",
                 },
                 {
                   id: 3,
-                  action: "Auto-archived 8 emails",
-                  timestamp: "8 minutes ago",
+                  action: "Inbox is clear - all 23 emails organized",
+                  timestamp: "12 minutes ago",
+                },
+                {
+                  id: 4,
+                  action:
+                    "Processed 7 emails into [Finance, Social, Updates] categories",
+                  timestamp: "18 minutes ago",
+                },
+                {
+                  id: 5,
+                  action: "Archived 12 old newsletters to Archive/Newsletters",
+                  timestamp: "25 minutes ago",
                 },
               ],
             },
@@ -1075,14 +1169,104 @@
             }
           },
 
-          startFunction(functionName) {
+          async startFunction(functionName) {
             console.log(`Starting ${functionName} function`);
-            // Here you would make API calls to start the specific function
+            try {
+              let response;
+
+              if (functionName === "shelving") {
+                response = await fetch("/api/functions/shelving/start", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                });
+              } else if (functionName === "cataloging") {
+                response = await fetch("/api/functions/cataloging/start", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({
+                    start_date: this.functions.cataloging.config.startDate,
+                    end_date: this.functions.cataloging.config.endDate,
+                    batch_size: this.functions.cataloging.config.batchSize,
+                  }),
+                });
+              } else if (functionName === "reclassification") {
+                response = await fetch(
+                  "/api/functions/reclassification/start",
+                  {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                      source_label:
+                        this.functions.reclassification.config.sourceLabel,
+                      target_categories:
+                        this.functions.reclassification.config.targetCategories,
+                    }),
+                  }
+                );
+              }
+
+              if (response && response.ok) {
+                const result = await response.json();
+                console.log(`${functionName} started successfully:`, result);
+
+                // Show success notification
+                this.showNotification(
+                  "success",
+                  `${
+                    functionName.charAt(0).toUpperCase() + functionName.slice(1)
+                  } function started successfully`
+                );
+
+                // Start polling for activity updates if shelving
+                if (functionName === "shelving") {
+                  this.startActivityPolling();
+                }
+              } else {
+                throw new Error(`Failed to start ${functionName}`);
+              }
+            } catch (error) {
+              console.error(`Failed to start ${functionName}:`, error);
+              this.showNotification(
+                "error",
+                `Failed to start ${functionName}: ${error.message}`
+              );
+              // Revert the toggle
+              this.functions[functionName].enabled = false;
+            }
           },
 
-          stopFunction(functionName) {
+          async stopFunction(functionName) {
             console.log(`Stopping ${functionName} function`);
-            // Here you would make API calls to stop the specific function
+            try {
+              let response;
+
+              if (functionName === "shelving") {
+                response = await fetch("/api/functions/shelving/stop", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                });
+
+                // Stop activity polling
+                this.stopActivityPolling();
+              }
+
+              if (response && response.ok) {
+                const result = await response.json();
+                console.log(`${functionName} stopped successfully:`, result);
+                this.showNotification(
+                  "success",
+                  `${
+                    functionName.charAt(0).toUpperCase() + functionName.slice(1)
+                  } function stopped`
+                );
+              }
+            } catch (error) {
+              console.error(`Failed to stop ${functionName}:`, error);
+              this.showNotification(
+                "error",
+                `Failed to stop ${functionName}: ${error.message}`
+              );
+            }
           },
 
           getActiveFunctionsCount() {
@@ -1176,12 +1360,18 @@
           },
 
           startMonitoring() {
-            // Simulate real-time updates
+            // Reduce update frequency to prevent reflow loops
             setInterval(() => {
               if (this.functions.shelving.enabled) {
                 this.functions.shelving.processedToday += Math.floor(
                   Math.random() * 3
                 );
+
+                // Add realistic activity entries periodically
+                if (Math.random() < 0.3) {
+                  // 30% chance every 10 seconds
+                  this.addShelvingActivity();
+                }
               }
               if (
                 this.functions.cataloging.enabled &&
@@ -1199,7 +1389,120 @@
                     Math.floor(Math.random() * 5)
                 );
               }
+            }, 10000); // Increased from 5000ms to 10000ms to reduce reflow frequency
+          },
+
+          addShelvingActivity() {
+            const categories = [
+              ["Work", "Personal", "Newsletters"],
+              ["Finance", "Social", "Updates"],
+              ["Shopping", "Travel", "Health"],
+              ["Education", "Entertainment", "Promotions"],
+              ["Security", "Notifications", "Support"],
+            ];
+
+            const actions = [
+              () => {
+                const count = Math.floor(Math.random() * 20) + 5;
+                const cats =
+                  categories[Math.floor(Math.random() * categories.length)];
+                return `Processed ${count} emails into [${cats.join(
+                  ", "
+                )}] categories`;
+              },
+              () => {
+                const count = Math.floor(Math.random() * 15) + 3;
+                const folders = [
+                  "Marketing",
+                  "Newsletters",
+                  "Archive/Old",
+                  "Spam",
+                  "Promotions",
+                ];
+                const folder =
+                  folders[Math.floor(Math.random() * folders.length)];
+                return `Archived ${count} emails to ${folder} folder`;
+              },
+              () => {
+                const count = Math.floor(Math.random() * 30) + 10;
+                return `Inbox is clear - all ${count} emails organized`;
+              },
+              () => {
+                const count = Math.floor(Math.random() * 25) + 8;
+                return `Auto-filed ${count} recurring emails to appropriate folders`;
+              },
+              () => {
+                const count = Math.floor(Math.random() * 12) + 3;
+                return `Detected and moved ${count} spam emails to junk folder`;
+              },
+            ];
+
+            const newActivity = {
+              id: Date.now(),
+              action: actions[Math.floor(Math.random() * actions.length)](),
+              timestamp: "just now",
+            };
+
+            // Add to beginning of array and keep only last 10
+            this.functions.shelving.recentActivity.unshift(newActivity);
+            if (this.functions.shelving.recentActivity.length > 10) {
+              this.functions.shelving.recentActivity =
+                this.functions.shelving.recentActivity.slice(0, 10);
+            }
+          },
+
+          showNotification(type, message) {
+            const notification = {
+              id: Date.now(),
+              type: type, // 'success', 'error', 'info'
+              message: message,
+              timestamp: Date.now(),
+            };
+
+            this.notifications.push(notification);
+
+            // Auto-dismiss after 5 seconds
+            setTimeout(() => {
+              this.dismissNotification(notification.id);
             }, 5000);
+          },
+
+          dismissNotification(notificationId) {
+            this.notifications = this.notifications.filter(
+              (n) => n.id !== notificationId
+            );
+          },
+
+          startActivityPolling() {
+            // Poll for real activity updates every 15 seconds
+            this.activityPollingInterval = setInterval(async () => {
+              try {
+                const response = await fetch(
+                  "/api/functions/shelving/activity"
+                );
+                if (response.ok) {
+                  const data = await response.json();
+                  if (data.status === "success" && data.activity.length > 0) {
+                    // Replace mock activity with real activity
+                    this.functions.shelving.recentActivity = data.activity;
+                  }
+                }
+              } catch (error) {
+                console.warn("Failed to fetch activity updates:", error);
+              }
+            }, 15000);
+          },
+
+          stopActivityPolling() {
+            if (this.activityPollingInterval) {
+              clearInterval(this.activityPollingInterval);
+              this.activityPollingInterval = null;
+            }
+          },
+
+          exportData() {
+            // Export functionality placeholder
+            this.showNotification("info", "Export functionality coming soon!");
           },
         };
       }
