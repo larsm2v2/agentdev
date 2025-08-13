@@ -4,7 +4,8 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Email Librarian - AI-Powered Email Organization</title>
-    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Local Tailwind CSS build instead of CDN -->
+    <link rel="stylesheet" href="/static/styles/output.css" />
     <script
       src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"
       defer
@@ -14,7 +15,7 @@
       rel="stylesheet"
       href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css"
     />
-    <link rel="stylesheet" href="styles/email_librarian.css" />
+    <link rel="stylesheet" href="/static/styles/email_librarian.css" />
     <style>
       /* Critical CSS to prevent layout reflow loops */
       * {
@@ -195,6 +196,50 @@
 
       <!-- Main Functions Panel -->
       <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        <!-- Gmail Authentication Banner -->
+        <div
+          class="bg-gray-800 rounded-xl shadow-sm border border-gray-600 mb-8"
+          x-show="!gmailAuthenticated"
+        >
+          <div class="p-6">
+            <div class="flex items-center justify-between">
+              <div>
+                <h3 class="text-lg font-semibold text-white">
+                  Gmail Authentication Required
+                </h3>
+                <p class="text-sm text-gray-300 mt-1">
+                  Connect your Gmail account to enable real email processing
+                </p>
+              </div>
+              <button
+                @click="authenticateGmail()"
+                class="bg-red-600 hover:bg-red-700 text-white px-6 py-3 rounded-lg font-medium transition-colors duration-200 flex items-center gap-2"
+              >
+                <i class="fab fa-google"></i>
+                Connect Gmail
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Gmail Auth Status Display -->
+        <div
+          class="bg-green-50 border border-green-200 rounded-xl p-4 mb-8"
+          x-show="gmailAuthenticated"
+        >
+          <div class="flex items-center gap-3">
+            <div class="text-green-600">
+              <i class="fas fa-check-circle text-xl"></i>
+            </div>
+            <div>
+              <h4 class="text-green-800 font-medium">Gmail Connected</h4>
+              <p class="text-green-600 text-sm">
+                Real email processing is now enabled
+              </p>
+            </div>
+          </div>
+        </div>
+
         <!-- Main Functions Panel -->
         <div
           class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8"
@@ -209,7 +254,7 @@
               <div class="flex items-center">
                 <i class="fas fa-inbox text-3xl text-blue-500 mr-3"></i>
                 <div>
-                  <h3 class="text-xl font-bold text-gray-800">Shelving</h3>
+                  <h3 class="text-xl font-bold text-white">Shelving</h3>
                   <p class="text-sm text-gray-600">Realtime Organization</p>
                 </div>
               </div>
@@ -270,7 +315,7 @@
               <div class="flex items-center">
                 <i class="fas fa-archive text-3xl text-green-500 mr-3"></i>
                 <div>
-                  <h3 class="text-xl font-bold text-gray-800">Cataloging</h3>
+                  <h3 class="text-xl font-bold text-white">Cataloging</h3>
                   <p class="text-sm text-gray-600">
                     Email Library Organization
                   </p>
@@ -333,9 +378,7 @@
               <div class="flex items-center">
                 <i class="fas fa-tags text-3xl text-purple-500 mr-3"></i>
                 <div>
-                  <h3 class="text-xl font-bold text-gray-800">
-                    Reclassification
-                  </h3>
+                  <h3 class="text-xl font-bold text-white">Reclassification</h3>
                   <p class="text-sm text-gray-600">
                     Email Specific Label Changes
                   </p>
@@ -400,7 +443,7 @@
                   class="fas fa-project-diagram text-3xl text-orange-500 mr-3"
                 ></i>
                 <div>
-                  <h3 class="text-xl font-bold text-gray-800">Workflows</h3>
+                  <h3 class="text-xl font-bold text-white">Workflows</h3>
                   <p class="text-sm text-gray-600">
                     n8n Integration & Automation
                   </p>
@@ -455,7 +498,7 @@
             </button>
           </div>
         </div>
-        <!-- Statistics Overview -->
+        <!-- Performance Statistics Overview -->
         <div
           class="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8"
           style="min-height: 120px"
@@ -473,13 +516,13 @@
           <div class="stats-card blue text-white rounded-lg p-6">
             <div class="flex items-center justify-between">
               <div>
-                <p class="text-white/80 text-sm">Categories Created</p>
+                <p class="text-white/80 text-sm">Cache Hit Rate</p>
                 <p
                   class="text-2xl font-bold"
-                  x-text="stats.categoriesCount"
+                  x-text="stats.cacheHitRate.toFixed(1) + '%'"
                 ></p>
               </div>
-              <i class="fas fa-folder text-3xl text-white/60"></i>
+              <i class="fas fa-memory text-3xl text-white/60"></i>
             </div>
           </div>
 
@@ -489,7 +532,7 @@
                 <p class="text-white/80 text-sm">Processing Speed</p>
                 <p
                   class="text-2xl font-bold"
-                  x-text="stats.avgSpeed + '/min'"
+                  x-text="stats.emailsPerSecond.toFixed(1) + '/sec'"
                 ></p>
               </div>
               <i class="fas fa-tachometer-alt text-3xl text-white/60"></i>
@@ -499,13 +542,13 @@
           <div class="stats-card purple text-white rounded-lg p-6">
             <div class="flex items-center justify-between">
               <div>
-                <p class="text-white/80 text-sm">Accuracy Rate</p>
+                <p class="text-white/80 text-sm">Uptime</p>
                 <p
                   class="text-2xl font-bold"
-                  x-text="stats.accuracyRate + '%'"
+                  x-text="stats.uptimeHours.toFixed(1) + 'h'"
                 ></p>
               </div>
-              <i class="fas fa-bullseye text-3xl text-white/60"></i>
+              <i class="fas fa-clock text-3xl text-white/60"></i>
             </div>
           </div>
         </div>
@@ -521,7 +564,7 @@
             <div class="flex items-center justify-between mb-6">
               <div class="flex items-center">
                 <i class="fas fa-inbox text-2xl text-blue-500 mr-3"></i>
-                <h2 class="text-2xl font-bold text-gray-800">
+                <h2 class="text-2xl font-bold text-white">
                   Shelving - Realtime Organization
                 </h2>
               </div>
@@ -607,7 +650,7 @@
           <div x-show="showTab === 'cataloging'" class="p-6">
             <div class="flex items-center mb-6">
               <i class="fas fa-archive text-2xl text-green-500 mr-3"></i>
-              <h2 class="text-2xl font-bold text-gray-800">
+              <h2 class="text-2xl font-bold text-white">
                 Cataloging - Email Library Organization
               </h2>
             </div>
@@ -696,7 +739,7 @@
           <div x-show="showTab === 'reclassification'" class="p-6">
             <div class="flex items-center mb-6">
               <i class="fas fa-tags text-2xl text-purple-500 mr-3"></i>
-              <h2 class="text-2xl font-bold text-gray-800">
+              <h2 class="text-2xl font-bold text-white">
                 Reclassification - Email Specific Label Changes
               </h2>
             </div>
@@ -794,7 +837,7 @@
                 <i
                   class="fas fa-project-diagram text-2xl text-orange-500 mr-3"
                 ></i>
-                <h2 class="text-2xl font-bold text-gray-800">
+                <h2 class="text-2xl font-bold text-white">
                   Workflows - n8n Integration & Automation
                 </h2>
               </div>
@@ -973,6 +1016,7 @@
           isLoading: false,
           connectionStatus: "connected",
           activityPollingInterval: null,
+          gmailAuthenticated: false,
           functions: {
             shelving: {
               enabled: false,
@@ -983,35 +1027,7 @@
                 batchSize: 10,
                 autoArchive: true,
               },
-              recentActivity: [
-                {
-                  id: 1,
-                  action:
-                    "Processed 15 emails into [Work, Personal, Newsletters] categories",
-                  timestamp: "2 minutes ago",
-                },
-                {
-                  id: 2,
-                  action: "Archived 8 promotional emails to Marketing folder",
-                  timestamp: "5 minutes ago",
-                },
-                {
-                  id: 3,
-                  action: "Inbox is clear - all 23 emails organized",
-                  timestamp: "12 minutes ago",
-                },
-                {
-                  id: 4,
-                  action:
-                    "Processed 7 emails into [Finance, Social, Updates] categories",
-                  timestamp: "18 minutes ago",
-                },
-                {
-                  id: 5,
-                  action: "Archived 12 old newsletters to Archive/Newsletters",
-                  timestamp: "25 minutes ago",
-                },
-              ],
+              recentActivity: [],
             },
             cataloging: {
               enabled: false,
@@ -1111,10 +1127,14 @@
             },
           },
           stats: {
-            totalProcessed: 3240,
-            categoriesCount: 43,
-            avgSpeed: 25,
-            accuracyRate: 94,
+            totalProcessed: 0,
+            categoriesCount: 0,
+            avgSpeed: 0,
+            accuracyRate: 0,
+            cacheHitRate: 0,
+            uptimeHours: 0,
+            cacheSize: 0,
+            emailsPerSecond: 0,
           },
           availableLabels: [
             { name: "work", count: 234 },
@@ -1150,6 +1170,9 @@
 
             // Load persisted states
             this.loadStates();
+
+            // Check Gmail authentication status
+            this.checkGmailAuth();
 
             // Start monitoring active functions
             this.startMonitoring();
@@ -1474,23 +1497,73 @@
           },
 
           startActivityPolling() {
-            // Poll for real activity updates every 15 seconds
+            // Poll for real activity updates and performance stats every 15 seconds
             this.activityPollingInterval = setInterval(async () => {
               try {
-                const response = await fetch(
+                // Fetch activity updates
+                const activityResponse = await fetch(
                   "/api/functions/shelving/activity"
                 );
-                if (response.ok) {
-                  const data = await response.json();
-                  if (data.status === "success" && data.activity.length > 0) {
+                if (activityResponse.ok) {
+                  const activityData = await activityResponse.json();
+                  if (
+                    activityData.status === "success" &&
+                    activityData.activity.length > 0
+                  ) {
                     // Replace mock activity with real activity
-                    this.functions.shelving.recentActivity = data.activity;
+                    this.functions.shelving.recentActivity =
+                      activityData.activity;
+                  }
+                }
+
+                // Fetch performance stats
+                const perfResponse = await fetch("/api/functions/performance");
+                if (perfResponse.ok) {
+                  const perfData = await perfResponse.json();
+                  if (perfData.status === "success") {
+                    // Update stats with real performance data
+                    this.stats = {
+                      totalProcessed: perfData.performance.emails_processed,
+                      categoriesCount: this.availableLabels.length, // Keep current label count
+                      avgSpeed: perfData.performance.emails_per_second * 60, // Convert to per minute
+                      accuracyRate: 94, // Keep static for now
+                      cacheHitRate: perfData.performance.cache_hit_rate,
+                      uptimeHours: perfData.performance.uptime_hours,
+                      cacheSize: perfData.performance.cache_size,
+                      emailsPerSecond: perfData.performance.emails_per_second,
+                    };
                   }
                 }
               } catch (error) {
-                console.warn("Failed to fetch activity updates:", error);
+                console.warn("Failed to fetch updates:", error);
               }
             }, 15000);
+
+            // Initial fetch on startup
+            this.fetchPerformanceStats();
+          },
+
+          async fetchPerformanceStats() {
+            try {
+              const response = await fetch("/api/functions/performance");
+              if (response.ok) {
+                const data = await response.json();
+                if (data.status === "success") {
+                  this.stats = {
+                    totalProcessed: data.performance.emails_processed,
+                    categoriesCount: this.availableLabels.length,
+                    avgSpeed: data.performance.emails_per_second * 60,
+                    accuracyRate: 94,
+                    cacheHitRate: data.performance.cache_hit_rate,
+                    uptimeHours: data.performance.uptime_hours,
+                    cacheSize: data.performance.cache_size,
+                    emailsPerSecond: data.performance.emails_per_second,
+                  };
+                }
+              }
+            } catch (error) {
+              console.warn("Failed to fetch performance stats:", error);
+            }
           },
 
           stopActivityPolling() {
@@ -1503,6 +1576,77 @@
           exportData() {
             // Export functionality placeholder
             this.showNotification("info", "Export functionality coming soon!");
+          },
+
+          async checkGmailAuth() {
+            try {
+              const response = await fetch("/auth/gmail/status");
+              const result = await response.json();
+              this.gmailAuthenticated = result.authenticated;
+
+              if (result.authenticated) {
+                console.log("✅ Gmail authenticated:", result.message);
+              } else {
+                console.log("❌ Gmail not authenticated:", result.message);
+              }
+            } catch (error) {
+              console.error("Failed to check Gmail auth status:", error);
+              this.gmailAuthenticated = false;
+            }
+          },
+
+          async authenticateGmail() {
+            try {
+              const response = await fetch("/auth/gmail/start");
+              const result = await response.json();
+
+              if (result.status === "success") {
+                // Open OAuth2 URL in new tab
+                window.open(
+                  result.authorization_url,
+                  "_blank",
+                  "width=600,height=700"
+                );
+
+                // Poll for authentication completion
+                this.pollForAuthCompletion();
+
+                this.showNotification(
+                  "info",
+                  "Opening Gmail authorization. Please complete the process in the new tab."
+                );
+              } else {
+                throw new Error(result.message);
+              }
+            } catch (error) {
+              console.error("Failed to start Gmail auth:", error);
+              this.showNotification(
+                "error",
+                `Failed to start Gmail authentication: ${error.message}`
+              );
+            }
+          },
+
+          pollForAuthCompletion() {
+            const pollInterval = setInterval(async () => {
+              const response = await fetch("/auth/gmail/status");
+              const result = await response.json();
+
+              if (result.authenticated) {
+                this.gmailAuthenticated = true;
+                clearInterval(pollInterval);
+                this.showNotification(
+                  "success",
+                  "🎉 Gmail connected successfully! Real email processing is now enabled."
+                );
+
+                // Refresh the dashboard
+                await this.fetchPerformanceStats();
+              }
+            }, 2000); // Check every 2 seconds
+
+            // Stop polling after 2 minutes
+            setTimeout(() => clearInterval(pollInterval), 120000);
           },
         };
       }

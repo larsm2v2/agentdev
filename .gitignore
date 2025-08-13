@@ -31,6 +31,11 @@ auth_*
 # Database credentials
 database.ini
 db_config.json
+# ========================================
+# Extras
+# ========================================
+# Code Citations
+CodeCitations.md
 
 # ========================================
 # DATA & CACHE FILES
@@ -291,6 +296,7 @@ deploy_staging.sh
 # Kubernetes secrets
 *-secret.yaml
 *-secrets.yaml
+
 
 # ========================================
 # NOTES FOR CLEANUP

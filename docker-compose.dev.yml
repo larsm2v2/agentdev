@@ -1,0 +1,154 @@
+services:
+  # Email Librarian Main Service - Development Version
+  email-librarian:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    container_name: email-librarian-server-dev
+    ports:
+      - "8000:8000"
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
+    extra_hosts:
+      - "oauth2.googleapis.com:74.125.21.95"
+      - "accounts.google.com:192.0.0.88"
+      - "www.googleapis.com:74.125.21.95"
+      - "googleapis.com:74.125.21.95"
+      - "gmail.googleapis.com:74.125.21.95"
+    environment:
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=email_librarian
+      - POSTGRES_USER=librarian_user
+      - POSTGRES_PASSWORD=secure_password_2024
+      - DATABASE_URL=postgresql://librarian_user:secure_password_2024@postgres:5432/email_librarian
+      - QDRANT_HOST=qdrant
+      - QDRANT_PORT=6333
+      - N8N_BASE_URL=http://n8n:5678
+      - REDIS_URL=redis://:redis_password_2024@redis:6379/0
+      - LANGFUSE_HOST=https://cloud.langfuse.com
+      - LOG_LEVEL=DEBUG # More verbose logging for dev
+      # Gmail credentials paths (files mounted via volumes)
+      - GMAIL_CREDENTIALS_PATH=/app/config/credentials.json
+      - GMAIL_TOKEN_PATH=/app/data/gmail_token.pickle
+      # Development environment flag
+      - DEVELOPMENT_MODE=true
+    volumes:
+      # DEVELOPMENT: Mount source code for live editing
+      - ./src:/app/src:rw
+      - ./frontend:/app/frontend:rw
+      - ./config:/app/config:ro # Read-only for security
+      - ./logs:/app/logs:rw
+      - ./data:/app/data:rw # Read-write for token updates
+      - email-cache:/app/email_cache:rw
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+      redis:
+        condition: service_healthy
+      n8n:
+        condition: service_healthy
+    # Development: Enable restart on failure for easier debugging
+    restart: unless-stopped
+    # Development: Override entrypoint to use auto-reload
+    command:
+      [
+        "uvicorn",
+        "src.core.enhanced_email_librarian_server:app",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8000",
+        "--reload",
+        "--reload-dir",
+        "/app/src",
+        "--reload-dir",
+        "/app/frontend",
+      ]
+
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: email_librarian_postgres
+    environment:
+      POSTGRES_DB: email_librarian
+      POSTGRES_USER: librarian_user
+      POSTGRES_PASSWORD: secure_password_2024
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./migrations:/docker-entrypoint-initdb.d
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U librarian_user -d email_librarian"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Qdrant Vector Database
+  qdrant:
+    image: qdrant/qdrant:v1.7.0
+    container_name: email_librarian_qdrant
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    environment:
+      - QDRANT__LOG_LEVEL=INFO
+
+  # Redis Cache
+  redis:
+    image: redis:7-alpine
+    container_name: email_librarian_redis
+    ports:
+      - "6379:6379"
+    command: redis-server --requirepass redis_password_2024
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # n8n Workflow Automation
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: email_librarian_n8n
+    ports:
+      - "5678:5678"
+    environment:
+      - N8N_BASIC_AUTH_ACTIVE=true
+      - N8N_BASIC_AUTH_USER=admin
+      - N8N_BASIC_AUTH_PASSWORD=n8n_password_2024
+      - WEBHOOK_URL=http://localhost:5678/
+      - GENERIC_TIMEZONE=UTC
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - ./n8n_workflows:/home/node/.n8n/workflows
+    depends_on:
+      - postgres
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "wget --no-verbose --tries=1 --spider http://localhost:5678/healthz || exit 1",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data:
+  qdrant_data:
+  redis_data:
+  n8n_data:
+  email-cache:
+
+networks:
+  default:
+    name: email_librarian_network
