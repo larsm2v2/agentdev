@@ -18,7 +18,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, BackgroundTasks, Depends
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, HTMLResponse, PlainTextResponse, RedirectResponse
+from fastapi.responses import JSONResponse, HTMLResponse, PlainTextResponse, RedirectResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 import uvicorn
@@ -166,10 +166,24 @@ class AgentTaskRequest(BaseModel):
 # Enhanced Email Librarian Server
 class EnhancedEmailLibrarianServer:
     def __init__(self):
+        # Create lifespan context manager first
+        @asynccontextmanager
+        async def lifespan(app: FastAPI):
+            # Startup
+            await self.setup_database()
+            await self.initialize_redis_cache()
+            logger.info("Enhanced Email Librarian Server started")
+            yield
+            # Shutdown
+            await self.database.disconnect()
+            await self.qdrant_client.close()
+            logger.info("Enhanced Email Librarian Server shutdown")
+
         self.app = FastAPI(
             title="Enhanced Email Librarian API",
             description="Enterprise email organization system with AI agents, vector search, and workflow automation",
-            version="2.0.0"
+            version="2.0.0",
+            lifespan=lifespan
         )
         
         # Database connections
@@ -231,9 +245,14 @@ class EnhancedEmailLibrarianServer:
         # TODO: Re-enable CrewAI agents after fixing LLM integration
         # self.setup_crewai_agents()
         
+        # Track active shelving job ID for dashboard control
+        self.active_shelving_job_id = None
+
         self.setup_middleware()
-        self.setup_static_files()
+        print("🔍 Starting route setup...")
         self.setup_routes()
+        print("🔍 Route setup completed!")
+        self.setup_static_files()
         
         # Redis cache will be initialized during startup event
         
@@ -295,19 +314,7 @@ class EnhancedEmailLibrarianServer:
             allow_headers=["*"],
         )
     
-    def setup_static_files(self):
-        """Mount static files and frontend"""
-        import os
-        
-        # Mount frontend static files
-        frontend_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "frontend")
-        if os.path.exists(frontend_path):
-            self.app.mount("/static", StaticFiles(directory=frontend_path), name="static")
-            # Also mount frontend directly for component loading
-            self.app.mount("/frontend", StaticFiles(directory=frontend_path), name="frontend")
-            print(f"✅ Mounted frontend directory: {frontend_path}")
-        else:
-            print(f"⚠️  Frontend directory not found: {frontend_path}")
+    
     
     def setup_crewai_agents(self):
         """Initialize CrewAI agents for different email processing tasks"""
@@ -420,17 +427,18 @@ class EnhancedEmailLibrarianServer:
     def setup_routes(self):
         """Setup all API routes"""
         
-        @self.app.on_event("startup")
-        async def startup():
-            await self.setup_database()
-            await self.initialize_redis_cache()
-            logger.info("Enhanced Email Librarian Server started")
+        # Root route to serve frontend
+        @self.app.get("/")
+        async def root():
+            # Use absolute path in container - working directory is /app
+            frontend_path = "/app/frontend"
+            index_path = os.path.join(frontend_path, "index.html")
+            if os.path.exists(index_path):
+                return FileResponse(index_path)
+            else:
+                return {"message": f"Frontend not found at {index_path} - Root route working!"}
         
-        @self.app.on_event("shutdown")
-        async def shutdown():
-            await self.database.disconnect()
-            await self.qdrant_client.close()
-            logger.info("Enhanced Email Librarian Server shutdown")
+        print("✅ Root route registered at /")
         
         # Health check
         @self.app.get("/health")
@@ -1335,11 +1343,9 @@ class EnhancedEmailLibrarianServer:
 
         @self.app.post("/api/functions/cataloging/start")
         async def start_cataloging_function(
-            start_date: str = ,
-            end_date: str = None,
-            batch_size: int = 50,
-            background_tasks: BackgroundTasks = BackgroundTasks(),
-            db: Session = Depends(self.get_db)
+            start_date: Optional[str] = None,
+            end_date: Optional[str] = None,
+            batch_size: int = 50
         ):
             """Start email cataloging function"""
             try:
@@ -1356,15 +1362,18 @@ class EnhancedEmailLibrarianServer:
                 )
                 
                 job_id = str(uuid.uuid4())
-                db_job = EmailProcessingJob(
-                    id=job_id,
-                    job_type="cataloging",
-                    config=job_config.parameters
-                )
-                db.add(db_job)
-                db.commit()
                 
-                background_tasks.add_task(self.process_job, job_id, job_config)
+                # Store job in memory (simplified for now)
+                self.active_jobs = getattr(self, 'active_jobs', {})
+                self.active_jobs[job_id] = {
+                    "job_type": "cataloging",
+                    "config": job_config.parameters,
+                    "status": "running",
+                    "started_at": datetime.utcnow().isoformat()
+                }
+                
+                # Start background processing (simplified)
+                asyncio.create_task(self.process_cataloging_job(job_id, job_config.parameters))
                 
                 return {
                     "status": "success",
@@ -1431,6 +1440,19 @@ class EnhancedEmailLibrarianServer:
             except WebSocketDisconnect:
                 self.active_connections.remove(websocket)
     
+    def setup_static_files(self):
+        """Mount static files for frontend access"""
+        import os
+        
+        # Mount frontend static files at /static/
+        frontend_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "frontend")
+        if os.path.exists(frontend_path):
+            # Mount at /static/, allowing routes to work at root
+            self.app.mount("/static", StaticFiles(directory=frontend_path), name="frontend_static")
+            print(f"✅ Mounted frontend directory: {frontend_path}")
+        else:
+            print(f"⚠️  Frontend directory not found: {frontend_path}")
+            
     async def process_job(self, job_id: str, job_config: JobConfig):
         """Process email organization job with enhanced features"""
         logger.info(f"🚀 Starting process_job for {job_id} with type {job_config.job_type}")
