@@ -4,7 +4,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-      target: production
+      target: development
     container_name: email-librarian-server
     ports:
       - "8000:8000"

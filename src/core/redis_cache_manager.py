@@ -37,6 +37,8 @@ class RedisCacheManager:
     async def initialize(self) -> bool:
         """Initialize Redis connection with health check"""
         try:
+            logger.info(f"🔗 Attempting to connect to Redis: {self.redis_url}")
+            
             # Create connection pool for better performance
             self.connection_pool = redis.ConnectionPool.from_url(
                 self.redis_url, 
@@ -62,9 +64,9 @@ class RedisCacheManager:
         """Close Redis connections gracefully"""
         try:
             if self.redis_client:
-                await self.redis_client.close()
+                await self.redis_client.aclose()
             if self.connection_pool:
-                await self.connection_pool.disconnect()
+                await self.connection_pool.aclose()
             logger.info("Redis connections closed successfully")
         except Exception as e:
             logger.error(f"Error closing Redis connections: {e}")

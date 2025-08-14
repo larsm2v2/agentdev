@@ -3,6 +3,7 @@ fastapi==0.115.9
 uvicorn[standard]==0.24.0
 websockets==12.0
 httpx>=0.25.0
+requests>=2.31.0
 typing-extensions>=4.8.0
 
 # Database & ORM
@@ -16,6 +17,12 @@ psycopg2-binary==2.9.9
 
 # Vector DB
 qdrant-client>=1.7.0
+
+# Embeddings for semantic search
+sentence-transformers>=2.2.0
+
+# Vector embeddings for semantic search
+sentence-transformers>=2.2.0
 
 # CrewAI (use latest compatible version without dependency conflicts)
 crewai==0.130.0

@@ -13,11 +13,21 @@ class EmailLibrarianController {
         name: "Cataloging",
         endpoint: "/cataloging",
         status: "inactive",
+        config: {
+          startDate: "",
+          endDate: "",
+          batchSize: 50,
+        },
       },
       reclassification: {
         name: "Reclassification",
         endpoint: "/reclassification",
         status: "inactive",
+        config: {
+          startDate: "",
+          endDate: "",
+          batchSize: 50,
+        },
       },
     };
     this.eventListeners = {};
@@ -143,14 +153,54 @@ class EmailLibrarianController {
   // Cataloging Methods
   async startCataloging(config) {
     try {
-      const response = await fetch(`${this.apiBase}/cataloging/start`, {
+      console.log("🎯 CONTROLLER: startCataloging called");
+      console.log("🔧 Controller starting cataloging with config:", config);
+      console.log("🌐 API Base URL:", this.apiBase);
+
+      // Convert frontend config to API format
+      const apiConfig = {
+        start_date: config.startDate,
+        end_date: config.endDate,
+        batch_size: config.batchSize || 50,
+      };
+
+      console.log("📡 Converted API config:", apiConfig);
+      console.log("🔗 Full URL:", `${this.apiBase}/functions/cataloging/start`);
+
+      const requestData = {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(config),
+        body: JSON.stringify(apiConfig),
+      };
+
+      console.log("📤 Request details:", requestData);
+      console.log("📦 Request body:", JSON.stringify(apiConfig));
+
+      console.log("🚀 Making fetch request...");
+      const response = await fetch(
+        `${this.apiBase}/functions/cataloging/start`,
+        requestData
+      );
+
+      console.log("📥 Response received:", {
+        status: response.status,
+        statusText: response.statusText,
+        ok: response.ok,
+        headers: Object.fromEntries(response.headers.entries()),
       });
 
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      return await response.json();
+      if (!response.ok) {
+        console.log("❌ Response not OK, getting error text...");
+        const errorText = await response.text();
+        console.error("❌ API Error Response:", errorText);
+        throw new Error(`HTTP ${response.status}: ${errorText}`);
+      }
+
+      console.log("✅ Response OK, parsing JSON...");
+      const result = await response.json();
+      console.log("🎉 API Result SUCCESS:", result);
+      return result;
+      return result;
     } catch (error) {
       console.error("❌ Failed to start cataloging:", error);
       throw error;
@@ -159,7 +209,9 @@ class EmailLibrarianController {
 
   async getCatalogingProgress() {
     try {
-      const response = await fetch(`${this.apiBase}/cataloging/progress`);
+      const response = await fetch(
+        `${this.apiBase}/functions/cataloging/progress`
+      );
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       return await response.json();
     } catch (error) {
@@ -170,9 +222,12 @@ class EmailLibrarianController {
 
   async pauseCataloging() {
     try {
-      const response = await fetch(`${this.apiBase}/cataloging/pause`, {
-        method: "POST",
-      });
+      const response = await fetch(
+        `${this.apiBase}/functions/cataloging/stop`,
+        {
+          method: "POST",
+        }
+      );
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       return await response.json();
     } catch (error) {
@@ -441,18 +496,174 @@ function enhancedEmailLibrarianApp() {
 
     async startCataloging() {
       try {
+        console.log("� BUTTON PRESSED: Start Cataloging button clicked!");
+        console.log("🔍 Current state:", {
+          isLoading: this.isLoading,
+          functions: this.functions,
+          catalogingConfig: this.functions.cataloging?.config,
+        });
+
         this.isLoading = true;
         const config = this.functions.cataloging.config;
-        await this.controller.startCataloging(config);
+
+        console.log("📋 Cataloging Config:", config);
+        console.log("📅 Date validation:", {
+          startDate: config.startDate,
+          endDate: config.endDate,
+          hasStartDate: !!config.startDate,
+          hasEndDate: !!config.endDate,
+        });
+
+        // Validate config
+        if (!config.startDate || !config.endDate) {
+          console.log("❌ Validation failed: Missing dates");
+          this.showNotification("Please select start and end dates", "error");
+          return;
+        }
+
+        console.log("✅ Validation passed, calling controller...");
+        const result = await this.controller.startCataloging(config);
+        console.log("🎉 Controller returned:", result);
 
         if (!this.functions.cataloging.enabled) {
+          console.log("🔧 Enabling cataloging function...");
           this.functions.cataloging.enabled = true;
           await this.toggleFunction("cataloging");
         }
 
+        console.log("✅ Cataloging job started successfully!");
+        console.log("📊 Starting progress monitoring...");
+        this.startCatalogingProgressMonitoring();
+
         this.showNotification("Cataloging started successfully", "success");
       } catch (error) {
-        this.showNotification("Failed to start cataloging", "error");
+        console.error("❌ Cataloging error:", error);
+        console.error("❌ Error details:", {
+          message: error.message,
+          stack: error.stack,
+          name: error.name,
+        });
+        this.showNotification(
+          `Failed to start cataloging: ${error.message}`,
+          "error"
+        );
+      } finally {
+        console.log(
+          "🏁 Cataloging function completed, setting isLoading = false"
+        );
+        this.isLoading = false;
+      }
+    },
+
+    // Add progress monitoring method for cataloging
+    startCatalogingProgressMonitoring() {
+      console.log("🔄 Starting cataloging progress monitoring...");
+
+      // Clear any existing interval
+      if (this.catalogingProgressInterval) {
+        clearInterval(this.catalogingProgressInterval);
+      }
+
+      // Poll for progress updates every 10 seconds
+      this.catalogingProgressInterval = setInterval(async () => {
+        try {
+          console.log("📊 Fetching cataloging progress...");
+          const response = await fetch("/api/functions/cataloging/progress");
+
+          if (response.ok) {
+            const data = await response.json();
+            console.log("📈 Progress data received:", data);
+
+            if (data.status === "success") {
+              // Update progress data
+              this.functions.cataloging.progress =
+                data.progress.progress_percentage;
+              this.functions.cataloging.processed =
+                data.progress.processed_emails;
+              this.functions.cataloging.remaining =
+                data.progress.remaining_emails;
+              this.functions.cataloging.processingRate =
+                data.progress.processing_speed;
+
+              // Update historical count
+              this.functions.cataloging.historicalCount =
+                data.progress.processed_emails + data.progress.remaining_emails;
+
+              // Update API monitoring data
+              this.functions.cataloging.apiCalls = data.progress.api_calls || 0;
+              this.functions.cataloging.apiCallsPerMinute =
+                data.progress.api_calls_per_minute || 0;
+              this.functions.cataloging.quotaUsed =
+                data.progress.quota_used_percentage || 0;
+              this.functions.cataloging.estimatedTime =
+                data.progress.estimated_completion || "";
+              this.functions.cataloging.categoriesFound =
+                data.progress.categories_found || [];
+
+              console.log(
+                `📊 Progress: ${data.progress.progress_percentage}% (${
+                  data.progress.processed_emails
+                }/${
+                  data.progress.processed_emails +
+                  data.progress.remaining_emails
+                })`
+              );
+
+              // Stop monitoring if complete
+              if (data.progress.progress_percentage >= 100) {
+                console.log(
+                  "✅ Cataloging completed, stopping progress monitoring"
+                );
+                this.stopCatalogingProgressMonitoring();
+                this.functions.cataloging.enabled = false;
+                this.showNotification(
+                  "Cataloging completed successfully!",
+                  "success"
+                );
+              }
+            }
+          } else {
+            console.error(
+              "❌ Progress fetch failed:",
+              response.status,
+              response.statusText
+            );
+          }
+        } catch (error) {
+          console.error("❌ Failed to fetch cataloging progress:", error);
+        }
+      }, 10000); // 10 seconds
+    },
+
+    stopCatalogingProgressMonitoring() {
+      console.log("🛑 Stopping cataloging progress monitoring");
+      if (this.catalogingProgressInterval) {
+        clearInterval(this.catalogingProgressInterval);
+        this.catalogingProgressInterval = null;
+      }
+    },
+
+    async stopCataloging() {
+      try {
+        console.log("🛑 Stopping cataloging...");
+        this.isLoading = true;
+
+        const result = await this.controller.pauseCataloging();
+        console.log("🛑 Cataloging stop result:", result);
+
+        // Stop progress monitoring
+        this.stopCatalogingProgressMonitoring();
+
+        // Update state
+        this.functions.cataloging.enabled = false;
+
+        this.showNotification("Cataloging stopped successfully", "success");
+      } catch (error) {
+        console.error("❌ Failed to stop cataloging:", error);
+        this.showNotification(
+          `Failed to stop cataloging: ${error.message}`,
+          "error"
+        );
       } finally {
         this.isLoading = false;
       }

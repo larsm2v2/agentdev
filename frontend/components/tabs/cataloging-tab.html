@@ -40,11 +40,42 @@
             max="500"
           />
         </div>
+
+        <!-- Debug Info -->
+        <div class="mt-4 p-3 bg-gray-100 rounded text-xs" x-show="true">
+          <h4 class="font-bold">Debug Info:</h4>
+          <div>
+            Start Date:
+            <span
+              x-text="functions.cataloging?.config?.startDate || 'not set'"
+            ></span>
+          </div>
+          <div>
+            End Date:
+            <span
+              x-text="functions.cataloging?.config?.endDate || 'not set'"
+            ></span>
+          </div>
+          <div>
+            Batch Size:
+            <span
+              x-text="functions.cataloging?.config?.batchSize || 'not set'"
+            ></span>
+          </div>
+          <div>isLoading: <span x-text="isLoading"></span></div>
+          <div>
+            Functions Object:
+            <span x-text="JSON.stringify(functions.cataloging, null, 2)"></span>
+          </div>
+        </div>
+
         <button
-          @click="startCataloging()"
+          @click="console.log('🔥 BUTTON CLICK EVENT TRIGGERED!', $data); startCataloging()"
           class="w-full bg-green-600 text-white py-2 px-4 rounded-md hover:bg-green-700 transition-colors"
+          :disabled="isLoading"
         >
-          <i class="fas fa-play mr-2"></i>Start Cataloging
+          <i class="fas fa-play mr-2"></i>
+          <span x-text="isLoading ? 'Starting...' : 'Start Cataloging'"></span>
         </button>
       </div>
     </div>

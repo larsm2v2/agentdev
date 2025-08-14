@@ -35,7 +35,7 @@ COPY . .
 RUN chmod +x docker-entrypoint.sh
 
 # Development command
-CMD ["python", "-m", "uvicorn", "src.core.enhanced_email_librarian_server:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+CMD ["python", "-m", "uvicorn", "src.core.enhanced_email_librarian_server:app", "--host", "0.0.0.0", "--port", "8000"]
 
 #############################################
 # Production stage
