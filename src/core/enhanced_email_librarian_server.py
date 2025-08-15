@@ -281,8 +281,9 @@ class EnhancedEmailLibrarianServer:
         # Initialize LLM manager for CrewAI agents
         # Initialize LLM manager only if MultiLLMManager is available
         try:
-            if 'MultiLLMManager' in globals() and callable(MultiLLMManager):
-                self.llm_manager = MultiLLMManager()
+            multi_llm_manager_cls = globals().get("MultiLLMManager")
+            if multi_llm_manager_cls is not None and callable(multi_llm_manager_cls):
+                self.llm_manager = multi_llm_manager_cls()
                 print(f"✅ LLM Manager initialized with {getattr(self.llm_manager, 'provider_type', None)}")
             else:
                 print("⚠️ MultiLLMManager not available - skipping LLM manager init")
@@ -601,9 +602,14 @@ class EnhancedEmailLibrarianServer:
         else:
             logger.warning("CrewAI Agent is not available. Agents will not be initialized.")
     
-    def get_email_tools(self) -> List[BaseTool]:
+    from typing import List
+    def get_email_tools(self) -> List['BaseTool']:
         """Create custom tools for email processing agents"""
-        
+        # The type expression for the return value should not use a variable as a type.
+        # Instead of List['BaseTool'], use List[Any] or List[type] if you want to be generic.
+        # If you want to be specific, you can import BaseTool and use List[BaseTool].
+        # For maximum compatibility, use List[Any]:
+        # def get_email_tools(self) -> List[Any]:        
         class VectorSearchTool(BaseTool):
             def __init__(self):
                 super().__init__(

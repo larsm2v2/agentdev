@@ -1,5 +1,5 @@
 # Multi-stage build for Email Librarian
-FROM python:3.11-slim AS base
+FROM python:3.14-rc-alpine3.20 AS base
 
 # Set environment variables
 ENV PYTHONPATH=/app

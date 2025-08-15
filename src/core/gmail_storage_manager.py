@@ -41,7 +41,7 @@ class EmailData:
 class GmailStorageManager:
     """Comprehensive storage manager for Gmail API data"""
     
-    def __init__(self, postgres_url: str = None, qdrant_host: str = None, redis_url: str = None):
+    def __init__(self, postgres_url: Optional[str] = None, qdrant_host: Optional[str] = None, redis_url: Optional[str] = None):
         # Use environment variables as defaults
         self.postgres_url = postgres_url or os.getenv("DATABASE_URL")
         self.qdrant_host = qdrant_host or os.getenv("QDRANT_HOST", "qdrant")
@@ -242,6 +242,8 @@ class GmailStorageManager:
         """Initialize embedding model for vector storage"""
         try:
             if EMBEDDINGS_AVAILABLE:
+                # Import SentenceTransformer here to ensure it's available
+                from sentence_transformers import SentenceTransformer
                 # Use lightweight model for fast embeddings
                 self.embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
                 print("✅ Embedding model loaded (all-MiniLM-L6-v2)")
