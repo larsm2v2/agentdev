@@ -13,6 +13,8 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, List, Any, Optional, Union, Tuple
+from typing import Dict, Any, List, Optional, Union, Tuple, cast
+from typing import Dict, List, Any, Optional, Union, Tuple, cast, Protocol
 import uuid
 import os
 from contextlib import asynccontextmanager
@@ -22,6 +24,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, HTMLResponse, PlainTextResponse, RedirectResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
+import logging
 import uvicorn
 
 # Database integrations
@@ -43,13 +46,24 @@ from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 
+# Configure logging early so imports and startup code can safely use logger
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
+
 # Direct LLM integration (no LangChain) - make optional
 try:
     from .direct_llm_providers import MultiLLMManager, LLMProvider
     from .modern_email_agents import ModernEmailAgents
     LLM_AVAILABLE = True
-except ImportError:
-    print("⚠️ LLM providers not available - Gmail categories will work without them")
+except Exception:
+    # LLM providers are optional; ensure names exist and mark as unavailable
+    MultiLLMManager = LLMProvider = ModernEmailAgents = None
     LLM_AVAILABLE = False
 
 # Observability (LangFuse - simplified/removed for now)
@@ -65,23 +79,109 @@ GMAIL_SCOPES = [
     'https://www.googleapis.com/auth/gmail.labels', 
     'https://www.googleapis.com/auth/gmail.modify'
 ]
-# try:
-#     from langfuse import Langfuse
-#     from langfuse.callback import CallbackHandler as LangfuseCallbackHandler
-#     LANGFUSE_AVAILABLE = True
-# except ImportError:
-#     LANGFUSE_AVAILABLE = False
-#     Langfuse = None
-#     LangfuseCallbackHandler = None
 
 # CrewAI (optional)
+# Provide a safe fallback BaseTool so static type checkers and runtime code always have a class to reference.
+class _FallbackBaseTool:
+    def __init__(self, name: str, description: str):
+        self.name = name
+        self.description = description
+
+# Expose BaseTool as a dynamic symbol (typing as Any avoids strict class-equality checks)
+BaseTool: Any = _FallbackBaseTool
+
+# Default CrewAI symbols - will be overridden if the optional package is available
+Agent = Task = Crew = Process = None
+CREWAI_AVAILABLE = False
+
 try:
-    from crewai import Agent, Task, Crew, Process
-    from crewai.tools import BaseTool
+    from crewai import Agent as _Agent, Task as _Task, Crew as _Crew, Process as _Process
+    Agent, Task, Crew, Process = _Agent, _Task, _Crew, _Process
+    try:
+        # primary modern package layout
+        from crewai.tools import BaseTool as _ImportedBaseTool
+        BaseTool = _ImportedBaseTool
+    except Exception:
+        # keep our fallback BaseTool (typed as Any)
+        pass
     CREWAI_AVAILABLE = True
 except ImportError:
-    Agent = Task = Crew = Process = BaseTool = None
+    # keep defaults and fallback BaseTool
     CREWAI_AVAILABLE = False
+
+# Backwards-compatible attempt to import an alternative package name some environments use
+import importlib
+try:
+    _mod = importlib.import_module("crewai_tools")
+    _ImportedBaseTool = getattr(_mod, "BaseTool", None)
+    if _ImportedBaseTool is not None:
+        BaseTool = _ImportedBaseTool
+        CREWAI_TOOLS_AVAILABLE = True
+    else:
+        CREWAI_TOOLS_AVAILABLE = False
+except Exception:
+    CREWAI_TOOLS_AVAILABLE = False
+
+
+# Lightweight organizer stub used as a safe default so code can access
+# expected attributes without the static analyzer treating organizers as None.
+class _OrganizerStub:
+    # Class-level attributes annotated as Any to help static analysis
+    service: Any = None
+    gmail_service: Any = None
+    creds: Any = None
+
+    def __init__(self):
+        # instance initialization kept minimal
+        self.service = None
+        self.gmail_service = None
+        self.creds = None
+
+    def authenticate(self) -> bool:
+        return False
+
+    def get_recent_emails(self, max_results: int = 50, days_back: int = 7):
+        return []
+
+    def get_email_content(self, message_id: str):
+        return {}
+
+    def classify_email(self, email_data: dict):
+        return {"category": "personal", "confidence": 0.3}
+
+    async def process_inbox_optimized(self, max_emails: int = 100, batch_size: int = 50):
+        return {"processed_count": 0, "processed": [], "stats": {"cache_hits": 0, "emails_per_second": 0.0}}
+
+    def process_emails_hybrid(self, email_ids: List[str], max_workers: int = 4, batch_size: int = 5) -> Dict[str, Any]:
+        """Compatibility shim for HighPerformanceGmailOrganizer.process_emails_hybrid"""
+        return {"processed": [], "failed": [], "stats": {"total_emails": len(email_ids), "cache_hits": 0, "processing_time": 0, "emails_per_second": 0.0}}
+
+    def _apply_category_label(self, message_id: str, category: str):
+        # No-op compatibility shim
+        return True
+
+
+# Protocol describing the attributes and methods the server expects from
+# different Gmail organizer implementations. This helps static analysis
+# while remaining implementation-agnostic at runtime.
+class GmailOrganizerProtocol(Protocol):
+    service: Any
+    gmail_service: Any
+    creds: Any
+    def authenticate(self, *args, **kwargs) -> bool: ...
+
+    def get_recent_emails(self, *args, **kwargs) -> List[str]: ...
+
+    def get_email_content(self, *args, **kwargs) -> Dict[str, Any]: ...
+
+    def classify_email(self, *args, **kwargs) -> Dict[str, Any]: ...
+
+    async def process_inbox_optimized(self, *args, **kwargs) -> Any: ...
+
+    def process_emails_hybrid(self, *args, **kwargs) -> Dict[str, Any]: ...
+
+    def _apply_category_label(self, *args, **kwargs) -> Any: ...
+
 
 # n8n integration
 import httpx
@@ -211,6 +311,22 @@ class AgentTaskRequest(BaseModel):
     email_data: Optional[Dict[str, Any]] = None
     config: Optional[Dict[str, Any]] = None
 
+def get_mock_gmail_labels():
+    # Return a small, static set of mock labels for environments without Gmail access
+    return {
+        "status": "success",
+        "categories": {
+            "system_labels": [
+                {"id": "INBOX", "name": "INBOX", "type": "system"},
+                {"id": "SENT", "name": "SENT", "type": "system"}
+            ],
+            "user_labels": [
+                {"id": "AI-Personal", "name": "AI-Personal", "type": "user"},
+                {"id": "AI-Work", "name": "AI-Work", "type": "user"}
+            ],
+            "total_count": 4
+        }
+    }
 # Enhanced Email Librarian Server
 class EnhancedEmailLibrarianServer:
     def __init__(self):
@@ -292,31 +408,36 @@ class EnhancedEmailLibrarianServer:
             print(f"⚠️  Failed to initialize LLM manager: {e}")
             self.llm_manager = None
         
-        # Gmail organizers
-        self.hp_organizer = None
-        self.ai_organizer = None
-        self.gmail_organizer = None  # For real-time Gmail API access
-        
+        # Gmail organizers - default to safe stub instances so attributes exist
+        # Use Any here to avoid strict Protocol assignment mismatches from differing organizer implementations
+        self.hp_organizer: Any = _OrganizerStub()
+        self.ai_organizer: Any = _OrganizerStub()
+        self.cost_optimized_organizer: Any = _OrganizerStub()
+        self.gmail_organizer: Any = _OrganizerStub()  # For real-time Gmail API access
+
         # Label caching for performance optimization
         self._label_cache = {}
         self._our_custom_labels = set()
-        
+
+        # Ensure categories exists for endpoints that list categories
+        self.categories = {}
+
         # Redis Cache Manager for persistent caching and analytics
         self.cache_manager = None
         self._redis_enabled = False
-        
+
         # Active connections and jobs
-        self.active_connections: List[WebSocket] = []
-        self.active_jobs: Dict[str, Dict] = {}
-        
+        self.active_connections = []
+        self.active_jobs = {}
+
         # OAuth2 state management for Gmail authentication
         self.oauth_states = {}  # Store OAuth2 states for security
         self.oauth_flow = None
-        
+
         # Activity tracking for dashboard
         self.recent_activities = []
         self.max_activities = 50  # Keep last 50 activities
-        
+
         # Performance tracking and caching system
         self.cache_dir = Path("email_cache")
         self.cache_dir.mkdir(exist_ok=True)
@@ -327,19 +448,19 @@ class EnhancedEmailLibrarianServer:
             "emails_per_second": 0,
             "last_reset": datetime.now().isoformat()
         }
-        
+
         # Thread-safe Gmail API access
         import threading
         self._gmail_lock = threading.Lock()
-        
+
         # OAuth flow for Gmail authentication
         self._oauth_flow = None
-        
+
         # CrewAI agents
         self.agents = {}
         # TODO: Re-enable CrewAI agents after fixing LLM integration
         # self.setup_crewai_agents()
-        
+
         # Track active shelving job ID for dashboard control
         self.active_shelving_job_id = None
 
@@ -352,7 +473,15 @@ class EnhancedEmailLibrarianServer:
         self.setup_static_files()
         
         # Initialize high-performance organizers
-        self.initialize_gmail_organizers()
+        # Schedule initialization on FastAPI startup to avoid creating tasks at import time
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(self.initialize_gmail_organizers())
+        except RuntimeError:
+            # No running loop (likely during import). Register startup event instead.
+            @self.app.on_event("startup")
+            async def _init_gmail_organizers_on_startup():
+                await self.initialize_gmail_organizers()
         
         # Redis cache will be initialized during startup event
         
@@ -458,99 +587,140 @@ class EnhancedEmailLibrarianServer:
             logger.error(f"Gmail authentication failed: {e}")
             return None
     
-    def initialize_gmail_organizers(self):
-        """Initialize high-performance Gmail organizers from src components"""
+    async def initialize_gmail_organizers(self):
+ 
         try:
             print("🚀 Initializing HIGH PERFORMANCE Gmail organizers...")
-            
-            # Get credentials path
-            credentials_path = os.getenv('GMAIL_CREDENTIALS_PATH', './config/credentials.json')
+            gmail_credentials_path = os.getenv('GMAIL_CREDENTIALS_PATH', './config/credentials.json')
             token_path = os.getenv('GMAIL_TOKEN_PATH', './data/gmail_token.pickle')
-            
-            # Initialize High Performance Gmail Organizer (with all optimizations)
+
+            # Initialize possible organizers with graceful fallbacks
+            self._initialize_high_performance_organizer(gmail_credentials_path)
+            self._initialize_cost_optimized_organizer(gmail_credentials_path)
+            self._fallback_to_basic_organizer(gmail_credentials_path)
+
+            # Initialize ModernEmailAgents if available (optional)
             try:
-                print("⚡ Initializing HighPerformanceGmailOrganizer...")
-                if 'HighPerformanceGmailOrganizer' in globals() and callable(HighPerformanceGmailOrganizer):
-                    self.hp_organizer = HighPerformanceGmailOrganizer(
-                        credentials_file=credentials_path
-                    )
-                    print("✅ HighPerformanceGmailOrganizer initialized successfully")
-                    # Set as primary organizer
-                    self.gmail_organizer = self.hp_organizer
-                else:
-                    print("⚠️ HighPerformanceGmailOrganizer not available - skipping")
-                    self.hp_organizer = None
-                
-            except Exception as e:
-                print(f"⚠️ HighPerformanceGmailOrganizer failed: {e}")
-                self.hp_organizer = None
-            
-            # Initialize Cost Optimized Organizer as regular GmailAIOrganizer
-            try:
-                print("💰 Initializing cost-optimized organizer (using GmailAIOrganizer)...")
-                if 'GmailAIOrganizer' in globals() and callable(GmailAIOrganizer):
-                    self.cost_optimized_organizer = GmailAIOrganizer(
-                        credentials_file=credentials_path
-                    )
-                    print("✅ Cost-optimized organizer initialized successfully")
-                else:
-                    print("⚠️ GmailAIOrganizer not available - skipping cost-optimized organizer")
-                    self.cost_optimized_organizer = None
-                
-            except Exception as e:
-                print(f"⚠️ Cost-optimized organizer failed: {e}")
-                self.cost_optimized_organizer = None
-            
-            # Fallback to basic organizer if high-performance ones fail
-            if not self.hp_organizer and not self.gmail_organizer:
-                try:
-                    print("📧 Falling back to basic GmailAIOrganizer...")
-                    if 'GmailAIOrganizer' in globals() and callable(GmailAIOrganizer):
-                        self.gmail_organizer = GmailAIOrganizer(
-                            credentials_file=credentials_path
-                        )
-                        print("✅ Basic GmailAIOrganizer initialized as fallback")
-                    else:
-                        print("❌ GmailAIOrganizer not available for fallback")
-                        self.gmail_organizer = None
-                    
-                except Exception as e:
-                    print(f"❌ All Gmail organizer initialization failed: {e}")
-                    self.gmail_organizer = None
-            
-            # Initialize Modern Email Agents if we have a working organizer
-            try:
-                if self.gmail_organizer:
-                    print("🤖 Initializing ModernEmailAgents...")
+                if 'ModernEmailAgents' in globals() and ModernEmailAgents is not None:
+                    # ModernEmailAgents constructor may expect organizer and llm manager
                     self.modern_agents = ModernEmailAgents(
                         gmail_organizer=self.gmail_organizer,
-                        llm_manager=self.llm_manager if hasattr(self, 'llm_manager') else None
+                        llm_manager=getattr(self, 'llm_manager', None)
                     )
                     print("✅ ModernEmailAgents initialized successfully")
                 else:
                     self.modern_agents = None
-                    
+                    print("ℹ️ ModernEmailAgents not available")
             except Exception as e:
                 print(f"⚠️ ModernEmailAgents initialization failed: {e}")
                 self.modern_agents = None
-            
-            # Log the final configuration
-            organizer_type = "None"
-            if self.hp_organizer:
-                organizer_type = "HighPerformanceGmailOrganizer (OPTIMIZED)"
-            elif self.cost_optimized_organizer:
-                organizer_type = "GmailAIOrganizer" 
-            elif self.gmail_organizer:
-                organizer_type = "Basic GmailAIOrganizer"
-                
-            print(f"🎯 Gmail organizer configuration: {organizer_type}")
-            
+
+            self._log_organizer_configuration()
         except Exception as e:
-            print(f"❌ Gmail organizer initialization failed: {e}")
+            print(f"❌ initialize_gmail_organizers failed: {e}")
+    def _initialize_high_performance_organizer(self, gmail_credentials_path):
+        try:
+            print("⚡ Initializing HighPerformanceGmailOrganizer...")
+            if 'HighPerformanceGmailOrganizer' in globals() and HighPerformanceGmailOrganizer is not None:
+                self.hp_organizer = HighPerformanceGmailOrganizer(
+                    credentials_file=gmail_credentials_path
+                )
+                print("✅ HighPerformanceGmailOrganizer initialized successfully")
+                # Provide compatibility alias expected elsewhere in the code
+                try:
+                    # Some call sites expect a `gmail_service` attribute; alias it to `service`.
+                    setattr(self.hp_organizer, 'gmail_service', getattr(self.hp_organizer, 'service', None))
+                except Exception:
+                    pass
+                self.gmail_organizer = self.hp_organizer
+            else:
+                print("⚠️ HighPerformanceGmailOrganizer not available - skipping")
+                self.hp_organizer = None
+        except Exception as e:
+            print(f"⚠️ HighPerformanceGmailOrganizer failed: {e}")
             self.hp_organizer = None
+        
+    def _initialize_cost_optimized_organizer(self, gmail_credentials_path):
+        try:
+            print("💰 Initializing cost-optimized organizer (using GmailAIOrganizer)...")
+            if 'GmailAIOrganizer' in globals() and callable(GmailAIOrganizer):
+                self.cost_optimized_organizer = GmailAIOrganizer(
+                    credentials_file=gmail_credentials_path
+                )
+                print("✅ Cost-optimized organizer initialized successfully")
+                # Ensure a compatible async method process_inbox_optimized exists on the instance.
+                try:
+                    import types as _types
+
+                    async def _default_process_inbox_optimized(self_inst, max_emails: int = 500, batch_size: int = 50):
+                        """Default compatibility shim: fetch recent emails and perform light processing.
+                        Returns a minimal result dict similar to other organizers.
+                        """
+                        try:
+                            # Use existing synchronous helpers where possible
+                            if hasattr(self_inst, 'get_recent_emails'):
+                                email_ids = self_inst.get_recent_emails(max_results=max_emails)
+                            else:
+                                email_ids = []
+
+                            processed = []
+                            for eid in email_ids[:max_emails]:
+                                try:
+                                    data = self_inst.get_email_content(eid) if hasattr(self_inst, 'get_email_content') else {}
+                                    cls = self_inst.classify_email(data) if hasattr(self_inst, 'classify_email') else {"category": "personal"}
+                                    processed.append({"email_id": eid, "category": cls.get('category', 'personal')})
+                                except Exception:
+                                    continue
+
+                            return {
+                                "processed_count": len(processed),
+                                "processed": processed,
+                                "stats": {
+                                    "cache_hits": 0,
+                                    "emails_per_second": 0.0
+                                }
+                            }
+                        except Exception as e:
+                            return {"processed_count": 0, "processed": [], "stats": {"cache_hits": 0, "emails_per_second": 0.0}}
+
+                    # Bind method to instance if not present
+                    if not hasattr(self.cost_optimized_organizer, 'process_inbox_optimized'):
+                        bound = _types.MethodType(_default_process_inbox_optimized, self.cost_optimized_organizer)
+                        setattr(self.cost_optimized_organizer, 'process_inbox_optimized', bound)
+                except Exception:
+                    pass
+            else:
+                print("⚠️ GmailAIOrganizer not available - skipping cost-optimized organizer")
+                self.cost_optimized_organizer = None
+        except Exception as e:
+            print(f"⚠️ Cost-optimized organizer failed: {e}")
             self.cost_optimized_organizer = None
-            self.gmail_organizer = None
-            self.modern_agents = None
+    def _fallback_to_basic_organizer(self, gmail_credentials_path):
+        if not self.hp_organizer and not self.gmail_organizer:
+            try:
+                print("📧 Falling back to basic GmailAIOrganizer...")
+                if 'GmailAIOrganizer' in globals() and callable(GmailAIOrganizer):
+                    self.gmail_organizer = GmailAIOrganizer(
+                        credentials_file=gmail_credentials_path
+                    )
+                    print("✅ Basic GmailAIOrganizer initialized as fallback")
+                else:
+                    print("❌ GmailAIOrganizer not available for fallback")
+                    self.gmail_organizer = None
+            except Exception as e:
+                print(f"❌ All Gmail organizer initialization failed: {e}")
+                self.gmail_organizer = None
+        
+
+    def _log_organizer_configuration(self):
+        organizer_type = ""
+        if self.hp_organizer:
+            organizer_type = "HighPerformanceGmailOrganizer (OPTIMIZED)"
+        elif self.cost_optimized_organizer:
+            organizer_type = "GmailAIOrganizer"
+        elif self.gmail_organizer:
+            organizer_type = "Basic GmailAIOrganizer"
+        print(f"🎯 Gmail organizer configuration: {organizer_type}")
         
     def setup_middleware(self):
         self.app.add_middleware(
@@ -603,13 +773,11 @@ class EnhancedEmailLibrarianServer:
             logger.warning("CrewAI Agent is not available. Agents will not be initialized.")
     
     from typing import List
-    def get_email_tools(self) -> List['BaseTool']:
+    def get_email_tools(self) -> List[Any]:
         """Create custom tools for email processing agents"""
-        # The type expression for the return value should not use a variable as a type.
-        # Instead of List['BaseTool'], use List[Any] or List[type] if you want to be generic.
-        # If you want to be specific, you can import BaseTool and use List[BaseTool].
-        # For maximum compatibility, use List[Any]:
-        # def get_email_tools(self) -> List[Any]:        
+    # Use module-level BaseTool (imported or fallback defined at module import time)
+    # ...existing code relies on BaseTool being present
+
         class VectorSearchTool(BaseTool):
             def __init__(self):
                 super().__init__(
@@ -687,7 +855,14 @@ class EnhancedEmailLibrarianServer:
             db.close()
     
     def setup_routes(self):
-        """Setup all API routes"""
+        """
+        Register all major API endpoints for the Enhanced Email Librarian server.
+
+        This method is central to the application's routing logic, setting up a large number of endpoints
+        for health checks, analytics, Gmail integration, job management, agent execution, n8n workflows,
+        performance metrics, and more. Future maintainers should review this function for any changes
+        to the API surface.
+        """
         
         # Root route to serve email_librarian.html directly
         @self.app.get("/")
@@ -1046,8 +1221,8 @@ class EnhancedEmailLibrarianServer:
             logger.info(f"Background task added for job {job_id}")
             
             return {"job_id": job_id, "status": "created"}
-        
-        @self.app.get("/api/jobs/{job_id}")
+
+        @self.app.get("/api/jobs/{job_id}", response_model=Dict[str, Any])
         async def get_job_status(job_id: str, db: Session = Depends(self.get_db)):
             """Get job status and results"""
             job = db.query(EmailProcessingJob).filter(EmailProcessingJob.id == job_id).first()
@@ -1101,7 +1276,7 @@ class EnhancedEmailLibrarianServer:
             """Get current Gmail labels with email counts"""
             try:
                 # Initialize Gmail organizer if not exists
-                if not hasattr(self, 'gmail_organizer') or not self.gmail_organizer:
+                if not hasattr(self, 'gmail_organizer') or not self.gmail_organizer or self.gmail_organizer.service is None:
                     # Use environment variables for credential paths
                     credentials_path = os.getenv('GMAIL_CREDENTIALS_PATH', './config/credentials.json')
                     token_path = os.getenv('GMAIL_TOKEN_PATH', './data/gmail_token.pickle')
@@ -1110,65 +1285,37 @@ class EnhancedEmailLibrarianServer:
                     if not os.path.exists(credentials_path):
                         logger.warning(f"Gmail credentials not found at {credentials_path}")
                         # Return mock data when credentials are not available
-                        mock_labels = [
-                            {"name": "Work", "id": "work", "count": 34, "color": "#4285f4"},
-                            {"name": "Personal", "id": "personal", "count": 28, "color": "#ea4335"},
-                            {"name": "Shopping", "id": "shopping", "count": 15, "color": "#fbbc04"},
-                            {"name": "Travel", "id": "travel", "count": 8, "color": "#34a853"},
-                            {"name": "Banking", "id": "banking", "count": 12, "color": "#9aa0a6"},
-                            {"name": "Newsletters", "id": "newsletters", "count": 45, "color": "#ff6d01"},
-                            {"name": "Social", "id": "social", "count": 19, "color": "#ab47bc"},
-                            {"name": "Promotions", "id": "promotions", "count": 23, "color": "#00acc1"},
-                            {"name": "Updates", "id": "updates", "count": 11, "color": "#7cb342"},
-                            {"name": "Receipts", "id": "receipts", "count": 7, "color": "#f57c00"}
-                        ]
-                        return {"labels": mock_labels, "source": "mock", "message": f"Gmail credentials not found at {credentials_path}"}
+                        mock_labels = get_mock_gmail_labels()
+                if not hasattr(self, 'gmail_organizer') or not self.gmail_organizer or self.gmail_organizer.service is None:
+                    # Use environment variables for credential paths
+                    gmail_credentials_path = os.getenv('GMAIL_CREDENTIALS_PATH', './config/credentials.json')
+                    token_path = os.getenv('GMAIL_TOKEN_PATH', './data/gmail_token.pickle')
                     
-                    self.gmail_organizer = GmailAIOrganizer(credentials_file=credentials_path)
+                    # Check if credentials file exists
+                    if not os.path.exists(gmail_credentials_path):
+                        logger.warning(f"Gmail credentials not found at {gmail_credentials_path}")
+                        # Return mock data when credentials are not available
+                        mock_labels = get_mock_gmail_labels()
+                    if GmailAIOrganizer is not None and callable(GmailAIOrganizer):
+                        self.gmail_organizer = GmailAIOrganizer(credentials_file=gmail_credentials_path)
+                    else:
+                        logger.error("GmailAIOrganizer is not available or not callable")
+                        self.gmail_organizer = None
                     # Set token path if different from default
-                    if token_path != './data/gmail_token.pickle':
+                    if token_path != './data/gmail_token.pickle' and self.gmail_organizer is not None:
                         self.gmail_organizer.token_file = token_path
-                    
-                # Check if Gmail service is available and authenticated
-                if not self.gmail_organizer.service:
-                    auth_success = self.gmail_organizer.authenticate()
-                    if not auth_success:
+                if not getattr(self.gmail_organizer, "service", None):
+                    auth_success = self.gmail_organizer.authenticate() if hasattr(self.gmail_organizer, "authenticate") else False
+                    if not auth_success or not getattr(self.gmail_organizer, "service", None):
                         logger.warning("Gmail authentication failed - returning mock data")
-                        # Return mock data when Gmail is not available
-                        mock_labels = [
-                            {"name": "Work", "id": "work", "count": 34, "color": "#4285f4"},
-                            {"name": "Personal", "id": "personal", "count": 28, "color": "#ea4335"},
-                            {"name": "Shopping", "id": "shopping", "count": 15, "color": "#fbbc04"},
-                            {"name": "Travel", "id": "travel", "count": 8, "color": "#34a853"},
-                            {"name": "Banking", "id": "banking", "count": 12, "color": "#9aa0a6"},
-                            {"name": "Newsletters", "id": "newsletters", "count": 45, "color": "#ff6d01"},
-                            {"name": "Social", "id": "social", "count": 19, "color": "#ab47bc"},
-                            {"name": "Promotions", "id": "promotions", "count": 23, "color": "#00acc1"},
-                            {"name": "Updates", "id": "updates", "count": 11, "color": "#7cb342"},
-                            {"name": "Receipts", "id": "receipts", "count": 7, "color": "#f57c00"}
-                        ]
+                        mock_labels = get_mock_gmail_labels()
                         return {"labels": mock_labels, "source": "mock", "message": "Gmail authentication failed - using mock data"}
-                
-                # Double-check that service is now available after authentication
-                if not self.gmail_organizer.service:
-                    logger.error("Gmail service is still None after authentication attempt")
-                    mock_labels = [
-                        {"name": "Work", "id": "work", "count": 34, "color": "#4285f4"},
-                        {"name": "Personal", "id": "personal", "count": 28, "color": "#ea4335"},
-                        {"name": "Shopping", "id": "shopping", "count": 15, "color": "#fbbc04"},
-                        {"name": "Travel", "id": "travel", "count": 8, "color": "#34a853"},
-                        {"name": "Banking", "id": "banking", "count": 12, "color": "#9aa0a6"},
-                        {"name": "Newsletters", "id": "newsletters", "count": 45, "color": "#ff6d01"},
-                        {"name": "Social", "id": "social", "count": 19, "color": "#ab47bc"},
-                        {"name": "Promotions", "id": "promotions", "count": 23, "color": "#00acc1"},
-                        {"name": "Updates", "id": "updates", "count": 11, "color": "#7cb342"},
-                        {"name": "Receipts", "id": "receipts", "count": 7, "color": "#f57c00"}
-                    ]
-                    return {"labels": mock_labels, "source": "mock", "message": "Gmail service unavailable"}
-                
-                # Get labels from Gmail API - now we know service is not None
-                labels_result = self.gmail_organizer.service.users().labels().list(userId='me').execute()
-                labels = labels_result.get('labels', [])
+
+                if getattr(self.gmail_organizer, 'service', None):
+                    labels_result = getattr(self.gmail_organizer, 'service').users().labels().list(userId='me').execute()
+                    labels = labels_result.get('labels', [])
+                else:
+                    labels = []
                 
                 # Filter and process labels
                 available_labels = []
@@ -1183,12 +1330,15 @@ class EnhancedEmailLibrarianServer:
                     
                     try:
                         # Get email count for this label - service is guaranteed to be not None here
-                        messages = self.gmail_organizer.service.users().messages().list(
-                            userId='me', 
-                            labelIds=[label_id], 
-                            maxResults=1
-                        ).execute()
-                        count = messages.get('resultSizeEstimate', 0)
+                        if getattr(self.gmail_organizer, 'service', None):
+                            messages = getattr(self.gmail_organizer, 'service').users().messages().list(
+                                userId='me', 
+                                labelIds=[label_id], 
+                                maxResults=1
+                            ).execute()
+                            count = messages.get('resultSizeEstimate', 0)
+                        else:
+                            count = 0
                         
                         # Generate a color for the label (based on name hash)
                         import hashlib
@@ -1224,19 +1374,10 @@ class EnhancedEmailLibrarianServer:
             except Exception as e:
                 logger.error(f"Failed to get Gmail labels: {e}")
                 # Return mock data as fallback
-                mock_labels = [
-                    {"name": "Work", "id": "work", "count": 34, "color": "#4285f4"},
-                    {"name": "Personal", "id": "personal", "count": 28, "color": "#ea4335"},
-                    {"name": "Shopping", "id": "shopping", "count": 15, "color": "#fbbc04"},
-                    {"name": "Travel", "id": "travel", "count": 8, "color": "#34a853"},
-                    {"name": "Banking", "id": "banking", "count": 12, "color": "#9aa0a6"},
-                    {"name": "Newsletters", "id": "newsletters", "count": 45, "color": "#ff6d01"},
-                    {"name": "Social", "id": "social", "count": 19, "color": "#ab47bc"},
-                    {"name": "Promotions", "id": "promotions", "count": 23, "color": "#00acc1"},
-                    {"name": "Updates", "id": "updates", "count": 11, "color": "#7cb342"},
-                    {"name": "Receipts", "id": "receipts", "count": 7, "color": "#f57c00"}
-                ]
+                mock_labels = get_mock_gmail_labels()
                 return {"labels": mock_labels, "source": "mock", "message": f"Error: {str(e)}"}
+
+        
         
         # Gmail Authentication Endpoints
         @self.app.get("/api/gmail/auth/status")
@@ -1399,6 +1540,7 @@ class EnhancedEmailLibrarianServer:
                 if self.gmail_organizer:
                     self.gmail_organizer.creds = creds
                     self.gmail_organizer.service = None  # Will be rebuilt
+                await self.initialize_gmail_organizers()
                 
                 # Clean up flow
                 self._oauth_flow = None
@@ -1862,37 +2004,40 @@ class EnhancedEmailLibrarianServer:
                 # Use container-compatible Gmail categories if available
                 if CONTAINER_GMAIL_AVAILABLE:
                     logger.info("Using container-compatible Gmail categories")
-                    result = get_container_gmail_categories()
-                    
-                    if result.get("status") == "success":
-                        # Update our tracking
-                        categories = result.get("categories", {})
-                        total_labels = categories.get("total_count", 0)
-                        user_labels = len(categories.get("user_labels", []))
-                        system_labels = len(categories.get("system_labels", []))
+                    if get_container_gmail_categories is not None and callable(get_container_gmail_categories):
+                        result = get_container_gmail_categories()
                         
-                        # Cache the categories
-                        all_labels = categories.get("user_labels", []) + categories.get("system_labels", [])
-                        self._label_cache = {label['name']: label for label in all_labels}
-                        self._our_custom_labels = {label['name'] for label in categories.get("user_labels", [])}
-                        
-                        # Log activity
-                        self.add_activity(
-                            "cataloging",
-                            f"Retrieved {total_labels} Gmail labels ({user_labels} user, {system_labels} system) - Container Mode",
-                            {
-                                "api_calls": result.get("api_calls_used", 1),
-                                "total_labels": total_labels,
-                                "user_labels": user_labels,
-                                "system_labels": system_labels,
-                                "container_mode": True
-                            }
-                        )
-                        
-                        logger.info(f"✅ Container mode: Retrieved {total_labels} Gmail labels")
-                        return result
+                        if result.get("status") == "success":
+                            # Update our tracking
+                            categories = result.get("categories", {})
+                            total_labels = categories.get("total_count", 0)
+                            user_labels = len(categories.get("user_labels", []))
+                            system_labels = len(categories.get("system_labels", []))
+                            
+                            # Cache the categories
+                            all_labels = categories.get("user_labels", []) + categories.get("system_labels", [])
+                            self._label_cache = {label['name']: label for label in all_labels}
+                            self._our_custom_labels = {label['name'] for label in categories.get("user_labels", [])}
+                            
+                            # Log activity
+                            self.add_activity(
+                                "cataloging",
+                                f"Retrieved {total_labels} Gmail labels ({user_labels} user, {system_labels} system) - Container Mode",
+                                {
+                                    "api_calls": result.get("api_calls_used", 1),
+                                    "total_labels": total_labels,
+                                    "user_labels": user_labels,
+                                    "system_labels": system_labels,
+                                    "container_mode": True
+                                }
+                            )
+                            
+                            logger.info(f"✅ Container mode: Retrieved {total_labels} Gmail labels")
+                            return result
+                        else:
+                            logger.warning(f"Container Gmail failed: {result.get('message', 'Unknown error')}")
                     else:
-                        logger.warning(f"Container Gmail failed: {result.get('message', 'Unknown error')}")
+                        logger.warning("get_container_gmail_categories is not available or not callable")
                 
                 # Fallback to direct Gmail API authentication
                 logger.info("Falling back to direct Gmail API")
@@ -1988,6 +2133,7 @@ class EnhancedEmailLibrarianServer:
                 # Use container-compatible batch email retrieval if available
                 if CONTAINER_GMAIL_AVAILABLE:
                     logger.info("Using container-compatible batch email retrieval")
+                    from src.core.container_gmail_categories import get_container_batch_emails
                     result = get_container_batch_emails(batch_size, query)
                     
                     if result.get("status") == "success":
@@ -2078,169 +2224,6 @@ class EnhancedEmailLibrarianServer:
                 
             except Exception as e:
                 logger.error(f"Failed to retrieve batch emails: {e}")
-                return {"status": "error", "message": str(e)}
-
-        @self.app.get("/api/functions/cataloging/batch-emails-single-call")
-        async def get_batch_emails_single_call():
-            """ULTRA-OPTIMIZED: Get 50 emails in exactly 1 API call"""
-            try:
-                logger.info("🚀 Starting ULTRA-OPTIMIZED single-call batch email retrieval...")
-                
-                # Import container Gmail functions
-                from .container_gmail_categories import get_container_batch_emails_single_call
-                
-                # Get emails with single API call
-                result = get_container_batch_emails_single_call()
-                
-                if result["status"] == "success":
-                    emails = result["emails"]
-                    summary = result["summary"]
-                    api_calls = result.get("api_calls_used", 1)
-                    
-                    # Create stats object
-                    stats = {
-                        "api_calls": api_calls,
-                        "emails_retrieved": len(emails),
-                        "ultra_optimized": True,
-                        "efficiency": f"{len(emails)} emails in {api_calls} call"
-                    }
-                    
-                    # Log activity
-                    self.add_activity(
-                        "ultra_optimization",
-                        f"ULTRA-OPTIMIZED: Retrieved {len(emails)} emails in {api_calls} API call",
-                        {
-                            "api_calls": api_calls,
-                            "total_emails": len(emails),
-                            "optimization": "single_api_call",
-                            "efficiency_rating": "maximum"
-                        }
-                    )
-                    
-                    logger.info(f"🎯 ULTRA-OPTIMIZATION SUCCESS: {len(emails)} emails in {api_calls} API call!")
-                    logger.info(f"⚡ Maximum efficiency achieved: {len(emails)} emails per call")
-                    
-                    return {
-                        "status": "success",
-                        "emails": emails,
-                        "stats": stats,
-                        "summary": summary,
-                        "optimization": "ultra_single_call",
-                        "message": f"ULTRA-OPTIMIZED: Retrieved {len(emails)} emails in {api_calls} API call"
-                    }
-                else:
-                    logger.error(f"Failed to get single-call emails: {result.get('message', 'Unknown error')}")
-                    return result
-                    
-            except Exception as e:
-                logger.error(f"Failed to retrieve emails with single call: {e}")
-                return {"status": "error", "message": str(e)}
-
-        @self.app.get("/api/functions/cataloging/batch-emails-categorization")
-        async def get_batch_emails_for_categorization():
-            """Get batch of emails optimized for AI categorization with metadata"""
-            try:
-                logger.info("🎯 Starting batch email retrieval for categorization...")
-                
-                # Import container Gmail functions
-                from .container_gmail_categories import get_container_batch_emails_for_categorization
-                
-                # Get categorization-ready emails
-                result = get_container_batch_emails_for_categorization()
-                
-                if result["status"] == "success":
-                    emails = result["emails"]
-                    summary = result["summary"]
-                    api_calls = result.get("api_calls_used", 0)
-                    
-                    # Create stats object for compatibility
-                    stats = {
-                        "api_calls": api_calls,
-                        "subjects_found": len([e for e in emails if e.get('subject')]),
-                        "senders_found": len([e for e in emails if e.get('from')]),
-                        "automated_detected": len([e for e in emails if e.get('is_automated', False)]),
-                        "unique_domains": len(set([e.get('sender_domain', '') for e in emails if e.get('sender_domain')]))
-                    }
-                    
-                    # Log activity with enhanced details
-                    self.add_activity(
-                        "categorization",
-                        f"Retrieved {len(emails)} emails for categorization with enhanced metadata",
-                        {
-                            "api_calls": stats["api_calls"],
-                            "total_emails": len(emails),
-                            "has_subjects": stats["subjects_found"],
-                            "has_senders": stats["senders_found"],
-                            "automated_emails": stats["automated_detected"],
-                            "domains_extracted": stats["unique_domains"],
-                            "categorization_ready": True
-                        }
-                    )
-                    
-                    logger.info(f"✅ Successfully retrieved {len(emails)} emails for categorization")
-                    logger.info(f"📊 Stats: {stats['api_calls']} API calls, {stats['subjects_found']} subjects, {stats['automated_detected']} automated")
-                    
-                    return {
-                        "status": "success",
-                        "emails": emails,
-                        "stats": stats,
-                        "summary": summary,
-                        "message": f"Retrieved {len(emails)} emails optimized for categorization"
-                    }
-                else:
-                    logger.error(f"Failed to get categorization emails: {result.get('message', 'Unknown error')}")
-                    return result
-                    
-            except Exception as e:
-                logger.error(f"Failed to retrieve emails for categorization: {e}")
-                return {"status": "error", "message": str(e)}
-
-        @self.app.get("/api/functions/cataloging/batch-emails-with-fields")
-        async def get_batch_emails_with_fields():
-            """Get 50 emails with field selection (ID, subject, labels) - optimized for efficiency"""
-            try:
-                # Import check
-                if not CONTAINER_GMAIL_AVAILABLE:
-                    return {"status": "error", "message": "Container Gmail integration not available"}
-                
-                from src.core.container_gmail_categories import get_container_batch_emails_with_fields
-                
-                # Get field-optimized emails
-                result = get_container_batch_emails_with_fields()
-                
-                if result["status"] == "success":
-                    emails = result["emails"]
-                    summary = result["summary"]
-                    
-                    # Log activity with proper batch HTTP details
-                    self.add_activity(
-                        "proper_batch_http",
-                        f"Retrieved {len(emails)} emails with proper Gmail batch HTTP (multipart/mixed)",
-                        {
-                            "api_calls": summary["api_calls"],
-                            "total_emails": len(emails),
-                            "http_requests": summary["http_requests"],
-                            "method": summary["method"],
-                            "optimization_notes": summary.get("optimization_notes", [])
-                        }
-                    )
-                    
-                    logger.info(f"⚡ Successfully retrieved {len(emails)} emails with proper batch HTTP")
-                    logger.info(f"🎯 Method: {summary['method']} | API calls: {summary['api_calls']} | HTTP requests: {summary['http_requests']}")
-                    
-                    return {
-                        "status": "success",
-                        "emails": emails,
-                        "summary": summary,
-                        "optimization": "proper_batch_http_multipart",
-                        "message": f"PROPER-BATCH-HTTP: Retrieved {len(emails)} emails in {summary['api_calls']} API calls using multipart/mixed format"
-                    }
-                else:
-                    logger.error(f"Failed to get field-optimized emails: {result.get('message', 'Unknown error')}")
-                    return result
-                    
-            except Exception as e:
-                logger.error(f"Failed to retrieve field-optimized emails: {e}")
                 return {"status": "error", "message": str(e)}
 
         @self.app.get("/api/functions/cataloging/batch-emails-with-storage")
@@ -2614,9 +2597,6 @@ class EnhancedEmailLibrarianServer:
                 logger.info("⚡ Using HighPerformanceGmailOrganizer (OPTIMIZED)")
                 return await self._process_with_high_performance_organizer(job_id, parameters)
                 
-            elif self.cost_optimized_organizer:
-                logger.info("💰 Using cost-optimized organizer (GmailAIOrganizer)")
-                return await self._process_with_cost_optimized_organizer(job_id, parameters)
                 
             elif self.gmail_organizer:
                 logger.info("📧 Using basic Gmail organizer")
@@ -2625,7 +2605,7 @@ class EnhancedEmailLibrarianServer:
             else:
                 # Initialize organizer if not available
                 logger.info("🔧 No organizer available, initializing...")
-                self.initialize_gmail_organizers()
+                await self.initialize_gmail_organizers()
                 
                 if self.hp_organizer:
                     return await self._process_with_high_performance_organizer(job_id, parameters)
@@ -2652,7 +2632,7 @@ class EnhancedEmailLibrarianServer:
             logger.info(f"⚡ High-performance config: max_emails={max_emails}, batch_size={batch_size}, llm_batch_size={llm_batch_size}, workers={max_workers}")
             
             # Get email IDs to process
-            email_ids = await self._get_email_ids_for_processing(max_emails, parameters)
+            email_ids = await self._get_email_ids_for_processing(max_emails, parameters or {})
             
             if not email_ids:
                 return {
@@ -2677,14 +2657,23 @@ class EnhancedEmailLibrarianServer:
             # - Smart content caching (avoids re-processing)
             # - Batch LLM processing (5+ emails per API call)
             # - Performance tracking
-            result = self.hp_organizer.process_emails_hybrid(
-                email_ids=email_ids,
-                max_workers=max_workers,
-                batch_size=llm_batch_size
-            )
-            
+            # Default result in case organizer is unavailable
+            result = {"processed": [], "stats": {"cache_hits": 0, "emails_per_second": 0}}
+
+            # Call hybrid processor if available on the organizer
+            try:
+                if hasattr(self.hp_organizer, 'process_emails_hybrid') and callable(getattr(self.hp_organizer, 'process_emails_hybrid')):
+                    result = self.hp_organizer.process_emails_hybrid(
+                        email_ids=email_ids,
+                        max_workers=max_workers,
+                        batch_size=llm_batch_size
+                    )
+            except Exception:
+                # Keep default result on any failure
+                result = {"processed": [], "stats": {"cache_hits": 0, "emails_per_second": 0}}
+
             processing_time = time.time() - start_time
-            
+
             # Update our performance stats
             self._update_performance_stats(
                 len(result["processed"]),
@@ -2730,10 +2719,17 @@ class EnhancedEmailLibrarianServer:
             logger.info(f"💰 Cost-optimized config: max_emails={max_emails}, batch_size={batch_size}")
             
             # Use cost-optimized processing
-            result = await self.cost_optimized_organizer.process_inbox_optimized(
-                max_emails=max_emails,
-                batch_size=batch_size
-            )
+            # Call cost-optimized method if present, otherwise fallback to default
+            if hasattr(self.cost_optimized_organizer, 'process_inbox_optimized') and callable(getattr(self.cost_optimized_organizer, 'process_inbox_optimized')):
+                try:
+                    result = await self.cost_optimized_organizer.process_inbox_optimized(
+                        max_emails=max_emails,
+                        batch_size=batch_size
+                    )
+                except Exception:
+                    result = {"processed_count": 0, "processed": [], "stats": {"cache_hits": 0, "emails_per_second": 0.0}}
+            else:
+                result = {"processed_count": 0, "processed": [], "stats": {"cache_hits": 0, "emails_per_second": 0.0}}
             
             processing_time = time.time() - start_time
             
@@ -2801,33 +2797,34 @@ class EnhancedEmailLibrarianServer:
             
             for i, email_id in enumerate(email_ids[:max_emails]):
                 try:
+                    if hasattr(self.gmail_organizer, 'service') and self.gmail_organizer.service:
                     # Use thread-safe Gmail API access
-                    with self._gmail_lock:
-                        message = self.gmail_organizer.service.users().messages().get(
-                            userId='me',
-                            id=email_id,
-                            format='full'
-                        ).execute()
-                    
-                    # Extract basic email info
-                    headers = message['payload'].get('headers', [])
-                    subject = next((h['value'] for h in headers if h['name'] == 'Subject'), 'No Subject')
-                    
-                    # Simple categorization (placeholder - would use AI classification)
-                    category = "general"  # Simplified for basic mode
-                    categories_created.add(category)
-                    
-                    # Apply label if needed
-                    if parameters.get('apply_labels', True):
-                        label_name = f"AI-{category.title()}"
                         with self._gmail_lock:
-                            self._apply_category_label_safe(email_id, category)
-                    
-                    processed_count += 1
-                    categorized_count += 1
-                    
-                    if (i + 1) % 10 == 0:
-                        logger.info(f"📧 Basic processing: {i + 1}/{len(email_ids)} emails")
+                            message = self.gmail_organizer.service.users().messages().get(
+                                userId='me',
+                                id=email_id,
+                                format='full'
+                            ).execute()
+                        
+                        # Extract basic email info
+                        headers = message['payload'].get('headers', [])
+                        subject = next((h['value'] for h in headers if h['name'] == 'Subject'), 'No Subject')
+                        
+                        # Simple categorization (placeholder - would use AI classification)
+                        category = "general"  # Simplified for basic mode
+                        categories_created.add(category)
+                        
+                        # Apply label if needed
+                        if parameters.get('apply_labels', True):
+                            label_name = f"AI-{category.title()}"
+                            with self._gmail_lock:
+                                self._apply_category_label_safe(email_id, category)
+                        
+                        processed_count += 1
+                        categorized_count += 1
+                        
+                        if (i + 1) % 10 == 0:
+                            logger.info(f"📧 Basic processing: {i + 1}/{len(email_ids)} emails")
                     
                 except Exception as e:
                     logger.warning(f"Failed to process email {email_id}: {e}")
@@ -2861,17 +2858,23 @@ class EnhancedEmailLibrarianServer:
         except Exception as e:
             logger.error(f"❌ Basic organizer processing failed: {e}")
             raise
-    async def _get_email_ids_for_processing(self, max_emails: int, parameters: dict = None) -> List[str]:
+    async def _get_email_ids_for_processing(self, max_emails: int, parameters: Optional[dict] = None) -> List[str]:
         """Get email IDs to process based on parameters"""
         try:
-            if parameters and parameters.get('message_ids'):
+            # Ensure parameters is always a dict to avoid .get on None
+            params: dict = parameters or {}
+            if params.get('message_ids'):
                 # Use specific email IDs if provided
-                return parameters['message_ids'][:max_emails]
+                return params['message_ids'][:max_emails]
             
             # Get unread emails from inbox
             if self.gmail_organizer and self.gmail_organizer.service:
                 with self._gmail_lock:
-                    query = parameters.get('query', 'in:inbox is:unread')
+                    # Use provided params dict if present, else default
+                    try:
+                        query = params.get('query', 'in:inbox is:unread')
+                    except Exception:
+                        query = 'in:inbox is:unread'
                     search_result = self.gmail_organizer.service.users().messages().list(
                         userId='me',
                         q=query,
@@ -3086,75 +3089,67 @@ class EnhancedEmailLibrarianServer:
 
     async def start_continuous_shelving(self, job_id: str):
         """Start continuous email shelving process"""
-        logger.info(f"🚀 Starting continuous shelving process for job {job_id}")
-        self.shelving_active = True
-        
+        logger.info(f"✅ Gmail organizer available: {type(self.gmail_organizer)}")
+
+        # Test Gmail API connection
         try:
-            # Check Gmail API authentication first
-            if not hasattr(self, 'gmail_organizer') or not self.gmail_organizer:
-                logger.error("❌ Gmail organizer not initialized - cannot start shelving")
+            if hasattr(self.gmail_organizer, 'service') and self.gmail_organizer.service:
+                profile = self.gmail_organizer.service.users().getProfile(userId='me').execute()
+                logger.info(f"✅ Gmail API connected for user: {profile.get('emailAddress', 'unknown')}")
+            else:
+                logger.error("❌ Gmail service not available")
                 return
-                
-            logger.info(f"✅ Gmail organizer available: {type(self.gmail_organizer)}")
-            
-            # Test Gmail API connection
-            try:
-                if hasattr(self.gmail_organizer, 'service') and self.gmail_organizer.service:
-                    profile = self.gmail_organizer.service.users().getProfile(userId='me').execute()
-                    logger.info(f"✅ Gmail API connected for user: {profile.get('emailAddress', 'unknown')}")
-                else:
-                    logger.error("❌ Gmail service not available")
-                    return
-            except Exception as e:
-                logger.error(f"❌ Gmail API connection failed: {e}")
-                return
-            
-            cycle_count = 0
+        except Exception as e:
+            logger.error(f"❌ Gmail API connection failed: {e}")
+            return
+
+        cycle_count = 0
+        try:
             while self.shelving_active:
                 cycle_count += 1
                 logger.info(f"🔄 Shelving cycle #{cycle_count} - checking for new emails...")
-                
+
                 # Check for new emails every 30 seconds
                 await asyncio.sleep(30)
-                
+
                 if not self.shelving_active:
                     logger.info("🛑 Shelving stopped by user")
                     break
-                    
+
                 try:
                     # Use new efficient batch method for shelving
                     logger.info("⚡ Using efficient batch method for shelving...")
-                    
+
                     query = "in:inbox is:unread"
                     logger.info(f"🔍 Gmail query: {query}")
-                    
+
                     # Import the new efficient batch method
                     try:
                         from src.core.container_gmail_categories import get_container_batch_emails_with_storage
-                        
+
                         # Use efficient batch retrieval with storage integration
                         batch_result = await get_container_batch_emails_with_storage(
                             batch_size=10,  # Process 10 unread emails at a time
                             query=query
                         )
-                        
+
                         if batch_result["status"] != "success":
                             logger.error(f"❌ Batch email retrieval failed: {batch_result.get('message', 'Unknown error')}")
                             continue
-                        
+
                         emails = batch_result.get("emails", [])
                         storage_info = batch_result.get("storage", {})
-                        
+
                         logger.info(f"📬 Retrieved {len(emails)} unread emails using batch method (API calls: {batch_result.get('summary', {}).get('api_calls', 'unknown')})")
-                        
+
                         if len(emails) == 0:
                             logger.info("✅ No new emails to process")
                             continue
-                        
+
                         # Log storage integration success
                         if storage_info:
                             logger.info(f"💾 Storage integration: PostgreSQL ID {storage_info.get('postgresql_id')}, Qdrant stored: {storage_info.get('qdrant_stored', 0)} vectors")
-                        
+
                     except ImportError:
                         logger.warning("⚠️ New batch method not available, falling back to individual API calls")
                         # Fallback to old method if new one isn't available
@@ -3163,10 +3158,10 @@ class EnhancedEmailLibrarianServer:
                             q=query,
                             maxResults=10
                         ).execute()
-                        
+
                         messages = search_result.get('messages', [])
                         emails = []
-                        
+
                         for msg in messages:
                             with self._gmail_lock:
                                 full_message = self.gmail_organizer.service.users().messages().get(
@@ -3174,28 +3169,28 @@ class EnhancedEmailLibrarianServer:
                                     id=msg['id'],
                                     format='full'
                                 ).execute()
-                            
+
                             headers = full_message['payload'].get('headers', [])
                             subject = next((h['value'] for h in headers if h['name'] == 'Subject'), 'No Subject')
                             sender = next((h['value'] for h in headers if h['name'] == 'From'), 'Unknown Sender')
-                            
+
                             emails.append({
                                 'id': msg['id'],
                                 'subject': subject,
                                 'sender': sender,
                                 'body': ""  # Basic fallback
                             })
-                    
+
                     # Process retrieved emails with performance tracking
                     processing_start = time.time()
                     successful_processing = 0
-                    
+
                     for i, email_data in enumerate(emails):
                         logger.info(f"📄 Processing email {i+1}/{len(emails)}: {email_data['id']}")
-                        
+
                         try:
                             logger.info(f"📧 Email details - Subject: '{email_data['subject'][:50]}', From: '{email_data['sender'][:30]}'")
-                            
+
                             # Check cache first
                             cached_classification = self._get_cached_classification(email_data)
                             if cached_classification:
@@ -3207,7 +3202,7 @@ class EnhancedEmailLibrarianServer:
                             else:
                                 # Process with AI if not cached
                                 logger.info(f"🤖 Starting AI processing for email {email_data['id'][:12]}")
-                                
+
                                 # Create a mini shelving job for this email
                                 mini_job_config = JobConfig(
                                     job_type="shelving",
@@ -3219,36 +3214,40 @@ class EnhancedEmailLibrarianServer:
                                         "email_data": email_data  # Pass email data for caching
                                     }
                                 )
-                                
+
                                 batch_job_id = f"{job_id}_email_{email_data['id']}"
                                 await self.process_job(batch_job_id, mini_job_config)
                                 successful_processing += 1
                             logger.info(f"✅ Completed processing email {email_data['id']}")
-                            
+
                         except Exception as e:
                             logger.error(f"❌ Failed to process email {email_data['id']}: {e}")
                             continue
-                    
+
                     # Calculate processing performance with batch efficiency tracking
                     processing_time = time.time() - processing_start
-                    api_calls_used = batch_result.get('summary', {}).get('api_calls', 1) if 'batch_result' in locals() else len(emails)
-                    
+                    # Use safe fallback: prefer reported api_calls if available in batch_result, else use email count
+                    try:
+                        api_calls_used = int((locals().get('batch_result') or {}).get('summary', {}).get('api_calls'))
+                    except Exception:
+                        api_calls_used = len(emails) if 'emails' in locals() else 0
+
                     logger.info(f"🎯 Completed shelving cycle #{cycle_count} - processed {successful_processing}/{len(emails)} emails in {processing_time:.2f}s (API calls: {api_calls_used})")
-                    
+
                     # Update performance stats
                     if successful_processing > 0:
                         self._update_performance_stats(successful_processing, processing_time)
-                    
+
                     # Log activity for processed emails with performance info including batch efficiency
                     if len(emails) > 0:
                         cache_hit_rate = (self.performance_stats["cache_hits"] / max(1, self.performance_stats["emails_processed"])) * 100
                         api_efficiency = f"{len(emails)}/{api_calls_used} emails/call" if api_calls_used > 0 else "N/A"
-                        
+
                         self.add_activity(
-                            "shelving", 
+                            "shelving",
                             f"⚡ Batch processed {successful_processing}/{len(emails)} emails in {processing_time:.1f}s ({cache_hit_rate:.0f}% cache hits, {api_efficiency})",
                             {
-                                "cycle": cycle_count, 
+                                "cycle": cycle_count,
                                 "emails_processed": successful_processing,
                                 "processing_time": processing_time,
                                 "cache_hits": self.performance_stats["cache_hits"],
@@ -3258,10 +3257,10 @@ class EnhancedEmailLibrarianServer:
                                 "method": "batch_optimized" if 'batch_result' in locals() else "fallback_individual"
                             }
                         )
-                    
+
                 except Exception as e:
                     logger.error(f"❌ Error in shelving cycle #{cycle_count}: {e}")
-                    
+
         except Exception as e:
             logger.error(f"❌ Critical error in continuous shelving: {e}")
         finally:
@@ -3282,16 +3281,19 @@ class EnhancedEmailLibrarianServer:
             end_date = parameters.get('end_date')
             batch_size = parameters.get('batch_size', 50)
             
-            # Use high-performance organizer if available
+              # Use high-performance organizer if available
+            # Ensure start_date and end_date are not None
+            safe_start_date = start_date if start_date is not None else ""
+            safe_end_date = end_date if end_date is not None else ""
             if self.hp_organizer:
                 result = await self._process_cataloging_with_fast_organizer(
-                    job_id, start_date, end_date, batch_size
+                    job_id, safe_start_date, safe_end_date, batch_size
                 )
             else:
                 result = await self._process_cataloging_with_basic_organizer(
-                    job_id, start_date, end_date, batch_size
+                    job_id, safe_start_date, safe_end_date, batch_size
                 )
-            
+          
             return result
             
         except Exception as e:
@@ -3431,10 +3433,13 @@ class EnhancedEmailLibrarianServer:
             logger.info(f"📅 Basic cataloging with date range: {start_date} to {end_date}")
             
             # Use your new efficient batching method
+            batch_result = {}
             result = await get_container_batch_emails_with_storage(
                 batch_size=batch_size,
                 query=gmail_query
             )
+            # Mirror to batch_result so later code that checks locals() sees it bound
+            batch_result = result or {}
             
             if result["status"] != "success":
                 return {
@@ -3500,10 +3505,10 @@ class EnhancedEmailLibrarianServer:
             query = f"after:{start_date} before:{end_date}"
             
             # Use Gmail organizer to search for emails
-            if self.hp_organizer and hasattr(self.hp_organizer, 'gmail_service'):
+            if self.hp_organizer and getattr(self.hp_organizer, 'gmail_service', None):
                 # Use the fast organizer's Gmail service
-                gmail_service = self.hp_organizer.gmail_service
-                
+                gmail_service = getattr(self.hp_organizer, 'gmail_service')
+
                 results = gmail_service.users().messages().list(
                     userId='me',
                     q=query,
@@ -3533,10 +3538,10 @@ class EnhancedEmailLibrarianServer:
                 
                 return email_ids
                 
-            elif self.gmail_organizer and hasattr(self.gmail_organizer, 'service'):
+            elif self.gmail_organizer and getattr(self.gmail_organizer, 'service', None):
                 # Use basic organizer's Gmail service
-                gmail_service = self.gmail_organizer.service
-                
+                gmail_service = getattr(self.gmail_organizer, 'service')
+
                 results = gmail_service.users().messages().list(
                     userId='me',
                     q=query,
@@ -3581,7 +3586,7 @@ class EnhancedEmailLibrarianServer:
             logger.warning(f"Error formatting activity message: {e}")
             return "Email processing completed"
 
-    def add_activity(self, activity_type: str, message: str, metadata: Dict = None):
+    def add_activity(self, activity_type: str, message: str, metadata: Optional[Dict] = None):
         """Add a new activity to the recent activities list"""
         try:
             from datetime import datetime
@@ -3605,6 +3610,41 @@ class EnhancedEmailLibrarianServer:
             
         except Exception as e:
             logger.error(f"Failed to add activity: {e}")
+
+    async def _initialize_label_cache_from_gmail(self):
+        """Populate a simple label cache from Gmail if organizer available (best-effort)."""
+        try:
+            if getattr(self, 'gmail_organizer', None) and getattr(self.gmail_organizer, 'service', None):
+                # Best-effort label cache; non-blocking
+                try:
+                    labels_result = self.gmail_organizer.service.users().labels().list(userId='me').execute()
+                    self.label_cache = {l['id']: l for l in labels_result.get('labels', [])}
+                except Exception:
+                    self.label_cache = {}
+            else:
+                self.label_cache = {}
+        except Exception:
+            self.label_cache = {}
+
+    async def _cache_job_analytics(self, job_id: str, task_result: dict):
+        """Store lightweight analytics to Redis if available (best-effort)."""
+        try:
+            if hasattr(self, 'cache_manager') and self.cache_manager is not None and self._redis_enabled:
+                # Use RedisCacheManager.cache_email_processing_stats which exists in redis_cache_manager.py
+                await self.cache_manager.cache_email_processing_stats(job_id, task_result)
+        except Exception:
+            # Non-fatal
+            pass
+
+    def _clean_email_body(self, body: str) -> str:
+        """Lightweight email body cleaner used by fallback processors."""
+        try:
+            if not body:
+                return ''
+            # Normalize whitespace
+            return ' '.join(body.split())
+        except Exception:
+            return body or ''
 
     def get_formatted_timestamp(self, iso_timestamp: str) -> str:
         """Convert ISO timestamp to human-readable format"""
@@ -3775,28 +3815,37 @@ Rules:
                     label_name = f"AI-{category.title()}"
                     
                     # Create label if it doesn't exist
-                    labels = self.gmail_organizer.service.users().labels().list(userId='me').execute()
-                    existing_labels = {label['name']: label['id'] for label in labels.get('labels', [])}
-                    
-                    if label_name not in existing_labels:
-                        label_object = {
-                            'name': label_name,
-                            'labelListVisibility': 'labelShow',
-                            'messageListVisibility': 'show'
-                        }
-                        created_label = self.gmail_organizer.service.users().labels().create(
-                            userId='me', body=label_object
-                        ).execute()
-                        label_id = created_label['id']
-                    else:
-                        label_id = existing_labels[label_name]
-                    
-                    # Apply label
-                    self.gmail_organizer.service.users().messages().modify(
-                        userId='me',
-                        id=email_id,
-                        body={'addLabelIds': [label_id]}
-                    ).execute()
+                    label_id = None
+                    try:
+                        if hasattr(self.gmail_organizer, 'service') and self.gmail_organizer.service:
+                            labels = self.gmail_organizer.service.users().labels().list(userId='me').execute()
+                            existing_labels = {label['name']: label['id'] for label in labels.get('labels', [])}
+
+                            if label_name not in existing_labels:
+                                label_object = {
+                                    'name': label_name,
+                                    'labelListVisibility': 'labelShow',
+                                    'messageListVisibility': 'show'
+                                }
+                                created_label = self.gmail_organizer.service.users().labels().create(
+                                    userId='me', body=label_object
+                                ).execute()
+                                label_id = created_label.get('id') if isinstance(created_label, dict) else None
+                            else:
+                                label_id = existing_labels.get(label_name)
+                    except Exception as e:
+                        logger.error(f"❌ Failed to create or retrieve label '{category}' for email {email_id[:12]}: {e}")
+
+                    # Apply label if we have a label_id
+                    if label_id and hasattr(self.gmail_organizer, 'service') and self.gmail_organizer.service:
+                        try:
+                            self.gmail_organizer.service.users().messages().modify(
+                                userId='me',
+                                id=email_id,
+                                body={'addLabelIds': [label_id]}
+                            ).execute()
+                        except Exception as e:
+                            logger.error(f"❌ Failed to apply label id '{label_id}' to email {email_id[:12]}: {e}")
                     
                 logger.info(f"✅ Applied label '{category}' to email {email_id[:12]}")
         except Exception as e:
@@ -3895,12 +3944,12 @@ Rules:
                 # Save credentials
                 credentials = self.oauth_flow.credentials
                 token_data = {
-                    'token': credentials.token,
-                    'refresh_token': credentials.refresh_token,
-                    'token_uri': credentials.token_uri,
-                    'client_id': credentials.client_id,
-                    'client_secret': credentials.client_secret,
-                    'scopes': credentials.scopes
+                    'token': getattr(credentials, 'token', None),
+                    'refresh_token': getattr(credentials, 'refresh_token', None),
+                    'token_uri': getattr(credentials, 'token_uri', None),
+                    'client_id': getattr(credentials, 'client_id', None),
+                    'client_secret': getattr(credentials, 'client_secret', None),
+                    'scopes': getattr(credentials, 'scopes', None)
                 }
                 
                 # Save to file

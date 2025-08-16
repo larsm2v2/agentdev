@@ -545,6 +545,44 @@ def get_container_batch_emails_with_fields(batch_size: int = 50, query: Optional
     gmail_cat = ContainerGmailCategories()
     return gmail_cat.get_batch_emails_with_fields(batch_size, query)
 
+
+def get_container_batch_emails(batch_size: int = 50, query: Optional[str] = None) -> Dict[str, Any]:
+    """Compatibility wrapper: returns a result shaped for server code that expects
+    'summary.total_emails' and 'api_calls_used'. Internally uses
+    get_container_batch_emails_with_fields.
+    """
+    res = get_container_batch_emails_with_fields(batch_size, query)
+
+    # If not successful, forward the error shape
+    if res.get("status") != "success":
+        return res
+
+    emails = res.get("emails", [])
+    summary = res.get("summary", {})
+
+    total = summary.get("total", len(emails))
+    api_calls = summary.get("api_calls", summary.get("api_calls_used", 1))
+
+    return {
+        "status": "success",
+        "emails": emails,
+        "summary": {
+            "total_emails": total,
+            "api_calls_used": api_calls,
+            "query_used": query or summary.get("query_used", "in:inbox"),
+        },
+        "api_calls_used": api_calls,
+    }
+
+
+def get_container_batch_emails_ultra_batch_http(batch_size: int = 50, query: Optional[str] = None) -> Dict[str, Any]:
+    """Alias for ultra-fast batch HTTP retrieval; falls back to the field-based
+    batch retriever when a specialized implementation is not available.
+    """
+    # For now reuse the fields-based implementation which already uses a
+    # proper batch HTTP multipart strategy in ContainerGmailCategories.get_batch_emails_with_fields
+    return get_container_batch_emails(batch_size=batch_size, query=query)
+
 # Enhanced storage-enabled functions
 async def get_container_batch_emails_with_storage(batch_size: int = 50, query: Optional[str] = None) -> Dict[str, Any]:
     """Get batch of emails with comprehensive storage in PostgreSQL, Qdrant, and Redis"""

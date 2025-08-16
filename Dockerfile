@@ -1,5 +1,5 @@
 # Multi-stage build for Email Librarian
-FROM python:3.14-rc-alpine3.20 AS base
+FROM python:3.11-slim AS base
 
 # Set environment variables
 ENV PYTHONPATH=/app
@@ -25,8 +25,22 @@ FROM base AS development
 
 # Copy requirements
 COPY requirements.docker.txt requirements.txt
-RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt
+# Ensure pip can reach PyPI directly even if Docker daemon has proxy configured
+ENV HTTP_PROXY="" \
+        http_proxy="" \
+        HTTPS_PROXY="" \
+        https_proxy="" \
+        NO_PROXY="pypi.org,files.pythonhosted.org,localhost,127.0.0.1"
+
+# If a wheelhouse was provided at build time (COPY wheelhouse /wheelhouse),
+# install from it to avoid network access. Otherwise install from PyPI.
+RUN if [ -d /wheelhouse ]; then \
+            python -m pip install --no-cache-dir --upgrade pip && \
+            pip install --no-cache-dir --no-index --find-links=/wheelhouse -r requirements.txt; \
+        else \
+            python -m pip install --no-cache-dir --upgrade pip && \
+            pip install --no-cache-dir -r requirements.txt; \
+        fi
 
 # Copy application code
 COPY . .
@@ -44,8 +58,21 @@ FROM base AS production
 
 # Copy requirements and install
 COPY requirements.docker.txt requirements.txt
-RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt
+# Ensure pip can reach PyPI directly even if Docker daemon has proxy configured
+ENV HTTP_PROXY="" \
+        http_proxy="" \
+        HTTPS_PROXY="" \
+        https_proxy="" \
+        NO_PROXY="pypi.org,files.pythonhosted.org,localhost,127.0.0.1"
+
+# Production: prefer wheelhouse if available to make builds deterministic and offline-capable
+RUN if [ -d /wheelhouse ]; then \
+            python -m pip install --no-cache-dir --upgrade pip && \
+            pip install --no-cache-dir --no-index --find-links=/wheelhouse -r requirements.txt; \
+        else \
+            python -m pip install --no-cache-dir --upgrade pip && \
+            pip install --no-cache-dir -r requirements.txt; \
+        fi
 
 # Copy only necessary application files
 COPY src/ ./src/

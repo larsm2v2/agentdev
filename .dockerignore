@@ -1,0 +1,66 @@
+# Version Control
+.git
+.github
+.gitignore
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# IDE Files
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+*.sublime-workspace
+*.sublime-project
+
+# Email cache and data (mount these as volumes instead)
+email_cache/
+data/
+
+# Logs
+logs/
+*.log
+
+# Docker
+.dockerignore
+docker-compose*.yml
+Dockerfile*
+!docker-entrypoint.sh
+
+# Documentation
+docs/
+*.md
+LICENSE
+
+# Frontend build artifacts (if applicable)
+frontend/node_modules/
+frontend/build/
+frontend/dist/
+
+# Any large files or directories not needed for the build
+*.zip
+*.tar.gz
+*.tgz
