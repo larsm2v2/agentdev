@@ -22,7 +22,7 @@ How to build using the wheelhouse:
 2. Build normally:
 
 ```bash
-docker compose build --progress=plain
+docker compose build --progress=auto
 ```
 
 Notes:

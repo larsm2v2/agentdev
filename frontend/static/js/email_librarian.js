@@ -34,7 +34,7 @@ class EmailLibrarianController {
         endpoint: "/workflows",
         status: "inactive",
         activeWorkflows: [],
-        executionHistory: [],
+        executionHistory: []
       },
     };
     this.eventListeners = {};
@@ -745,7 +745,7 @@ function enhancedEmailLibrarianApp() {
         this.showNotification("Failed to export data", "error");
       }
     },
-
+    
     toggleWorkflow(workflowId) {
       console.log(`Toggling workflow ${workflowId}`);
       const workflow = this.functions.workflows.activeWorkflows.find(

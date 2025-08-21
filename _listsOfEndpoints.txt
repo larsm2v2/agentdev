@@ -1,0 +1,57 @@
+Endpoints (grouped by file)
+
+enhanced_email_librarian_server.py
+    GET /health
+    GET /system-info
+    GET /api/analytics/overview
+    GET /api/analytics/performance
+    GET /api/cache/health
+    GET /api/metrics/live
+    GET /api/metrics/summary
+    GET /metrics (PlainTextResponse for Prometheus)
+    GET /main.html
+    GET /metrics-dashboard
+    POST /api/jobs/create
+    GET /api/jobs/{job_id}
+    POST /api/search/vector
+    GET /api/gmail/labels
+    GET /api/gmail/auth/status
+    POST /api/gmail/auth/refresh
+    GET /api/gmail/auth/authorize-url
+    GET /api/gmail/auth/callback
+    POST /api/agents/execute
+    GET /api/agents/executions/{execution_id}
+    POST /api/n8n/trigger/{workflow_id}
+    POST /api/functions/shelving/start
+    POST /api/functions/shelving/stop
+    GET /api/functions/shelving/status
+    GET /api/functions/shelving/activity
+    POST /api/functions/cataloging/start
+    POST /api/shelving/toggle
+    POST /api/functions/cataloging/stop
+    GET /api/functions/cataloging/progress
+    GET /api/functions/cataloging/activity
+    GET /api/functions/cataloging/api-log
+    GET /api/functions/cataloging/categories
+    GET /api/functions/cataloging/batch-emails
+    GET /api/functions/cataloging/batch-emails-with-storage
+    GET /api/storage/stats
+    POST /api/storage/search
+    GET /api/functions/cataloging/batch-emails-ultra-batch
+    GET /api/functions/performance
+    POST /api/functions/cataloging/start (duplicate/alternate registration exists — same path)
+    POST /api/functions/reclassification/start
+    WEBSOCKET /ws/librarian
+    GET /auth/gmail/start
+    GET /auth/gmail/callback
+    GET /auth/gmail/status
+metrics_dashboard.py
+    GET /
+    GET /api/metrics/live
+    GET /api/metrics/summary
+    WEBSOCKET /ws/metrics
+Other notes
+
+The frontend directory is mounted at / via StaticFiles(html=True) (so static/index routes are served by StaticFiles rather than decorated handlers).
+Path parameters in routes: {job_id}, {execution_id}, {workflow_id} — treat as dynamic segments.
+There are a few duplicated/near-duplicate decorator entries (e.g., /api/functions/cataloging/start appears more than once in the source — meaning there may be multiple registrations or re-definitions to review).

@@ -47,14 +47,7 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 
 # Configure logging early so imports and startup code can safely use logger
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler()
-    ]
-)
-logger = logging.getLogger(__name__)
+# (logging configured later with file + stream handlers)
 
 # Direct LLM integration (no LangChain) - make optional
 try:
@@ -237,6 +230,10 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger(__name__)
+
+# Frontend serving mode (change this single line to 'nonstatic' to use the dynamic FileResponse route)
+# Options: 'static' (default) or 'nonstatic'
+FRONTEND_SERVING_MODE = "static"
 
 # Database Models
 Base = declarative_base()
@@ -425,6 +422,13 @@ class EnhancedEmailLibrarianServer:
         # Redis Cache Manager for persistent caching and analytics
         self.cache_manager = None
         self._redis_enabled = False
+    # Configure frontend serving mode (default to static). Can be overridden with FRONTEND_MODE env var.
+        try:
+            # Use the module-level FRONTEND_SERVING_MODE for easy switching
+            frontend_mode = os.getenv("FRONTEND_MODE", FRONTEND_SERVING_MODE)
+            self.configure_frontend_serving(mode=frontend_mode)
+        except Exception as e:
+            logger.warning(f"Failed to configure frontend serving: {e}")
 
         # Active connections and jobs
         self.active_connections = []
@@ -865,17 +869,8 @@ class EnhancedEmailLibrarianServer:
         """
         
         # Root route to serve email_librarian.html directly
-        @self.app.get("/")
-        async def root():
-            # Use absolute path in container - working directory is /app
-            frontend_path = "/app/frontend"
-            email_librarian_path = os.path.join(frontend_path, "email_librarian.html")
-            if os.path.exists(email_librarian_path):
-                return FileResponse(email_librarian_path)
-            else:
-                return {"message": f"Frontend not found at {email_librarian_path} - Root route working!"}
-        
-        print("✅ Root route registered at /")
+    # Root is served by StaticFiles (mounted at / in setup_static_files)
+    # Keep explicit API route registration below; StaticFiles will serve index files and static assets.
         
         # Health check
         @self.app.get("/health")
@@ -1680,13 +1675,14 @@ class EnhancedEmailLibrarianServer:
                 logger.info("Stopping shelving function from dashboard")
                 
                 # Stop the active shelving job
-                if hasattr(self, 'active_shelving_job_id') and self.active_shelving_job_id:
-                    await self.update_job_status(self.active_shelving_job_id, "stopped")
+                job_to_stop = getattr(self, 'active_shelving_job_id', None)
+                if job_to_stop:
+                    await self.update_job_status(job_to_stop, "stopped")
                     self.shelving_active = False
-                    
+
                     # Log activity before clearing job ID
-                    self.add_activity("shelving", "Shelving function stopped", {"job_id": self.active_shelving_job_id})
-                    
+                    self.add_activity("shelving", "Shelving function stopped", {"job_id": job_to_stop})
+
                     self.active_shelving_job_id = None
                 
                 return {
@@ -1799,7 +1795,7 @@ class EnhancedEmailLibrarianServer:
                 
                 # Generate job ID
                 job_id = f"cataloging_{int(time.time())}"
-                
+
                 # Add job to active jobs tracking
                 self.active_jobs[job_id] = {
                     'job_type': 'cataloging',
@@ -1811,31 +1807,91 @@ class EnhancedEmailLibrarianServer:
                     'categories_created': [],
                     'progress': 0
                 }
-                
+
                 # Start cataloging job
                 result = await self.process_cataloging_job(job_id, parameters)
-                
+
                 # Update job status to completed
                 if job_id in self.active_jobs:
                     self.active_jobs[job_id]['status'] = 'completed'
-                
+
                 # Log activity
                 self.add_activity(
                     "cataloging",
                     f"Started cataloging job for dates {start_date} to {end_date} with batch size {batch_size}",
                     {"job_id": job_id, "date_range": f"{start_date} to {end_date}"}
                 )
-                
+
                 return {
                     "status": "success",
                     "job_id": job_id,
                     "message": "Cataloging function started successfully",
                     "result": result
                 }
-                
+
             except Exception as e:
                 logger.error(f"Failed to start cataloging: {e}")
                 return {"status": "error", "message": str(e)}
+
+
+        # Compatibility endpoint for frontend toggle button
+        @self.app.post("/api/shelving/toggle")
+        async def toggle_shelving(background_tasks: BackgroundTasks, db: Session = Depends(self.get_db)):
+            """Toggle the shelving function: start if stopped, stop if running.
+
+            This endpoint exists to match older frontend expectations which POST to
+            /api/shelving/toggle. It will start a shelving job (and return job_id)
+            or stop the currently active shelving job.
+            """
+            try:
+                is_active = getattr(self, 'shelving_active', False)
+
+                if is_active and getattr(self, 'active_shelving_job_id', None):
+                    # Stop currently active shelving job
+                    stopped_job = getattr(self, 'active_shelving_job_id', None)
+                    if stopped_job:
+                        await self.update_job_status(stopped_job, "stopped")
+                        self.shelving_active = False
+                        self.add_activity("shelving", "Shelving function stopped (toggled)", {"job_id": stopped_job})
+                        self.active_shelving_job_id = None
+
+                    return {"status": "stopped", "job_id": stopped_job, "message": "Shelving stopped"}
+
+                # Start shelving when not active
+                job_config = JobConfig(
+                    job_type="shelving",
+                    parameters={
+                        "max_emails": 50,
+                        "batch_size": 10,
+                        "continuous_monitoring": True,
+                        "real_time": True
+                    }
+                )
+
+                job_id = str(uuid.uuid4())
+
+                db_job = EmailProcessingJob(
+                    id=job_id,
+                    job_type="shelving",
+                    config=job_config.parameters,
+                    status="running"
+                )
+                db.add(db_job)
+                db.commit()
+
+                # Start background shelving process
+                background_tasks.add_task(self.start_continuous_shelving, job_id)
+
+                self.active_shelving_job_id = job_id
+                self.shelving_active = True
+
+                self.add_activity("shelving", "Shelving function started (toggled)", {"job_id": job_id})
+
+                return {"status": "started", "job_id": job_id, "message": "Shelving started"}
+
+            except Exception as e:
+                logger.error(f"Failed to toggle shelving: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
 
         @self.app.post("/api/functions/cataloging/stop")
         async def stop_cataloging():
@@ -2517,15 +2573,130 @@ class EnhancedEmailLibrarianServer:
     def setup_static_files(self):
         """Mount static files for frontend access"""
         import os
-        
-        # Mount frontend static files at /static/
+
+        # Mount frontend static files at root so index files are served automatically
         frontend_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "frontend")
         if os.path.exists(frontend_path):
-            # Mount at /static/, allowing routes to work at root
-            self.app.mount("/static", StaticFiles(directory=frontend_path), name="frontend_static")
-            print(f"✅ Mounted frontend directory: {frontend_path}")
+            # Avoid duplicate mounts by checking existing route paths
+            existing_paths = [getattr(r, 'path', None) for r in self.app.router.routes]
+
+            # Mount at / and allow StaticFiles to serve index (html=True)
+            if '/' not in existing_paths:
+                self.app.mount("/", StaticFiles(directory=frontend_path, html=True), name="frontend_static")
+                print(f"✅ Mounted frontend directory at root: {frontend_path}")
+            else:
+                print(f"ℹ️ Frontend already mounted at root")
+
+            # Also mount at /static to support legacy frontend paths like /static/email_librarian.html
+            if '/static' not in existing_paths:
+                self.app.mount("/static", StaticFiles(directory=frontend_path, html=True), name="frontend_static_files")
+                print(f"✅ Mounted frontend directory at /static: {frontend_path}")
+            else:
+                print(f"ℹ️ Frontend already mounted at /static")
         else:
             print(f"⚠️  Frontend directory not found: {frontend_path}")
+            
+    def setup_nonstatic_files(self, base_dir: Optional[str] = None):
+        """Register a dynamic route to serve non-static files from the frontend directory.
+
+        This is useful when you want to serve files on-demand (e.g. from disk,
+        with access checks) instead of mounting a StaticFiles instance.
+        The route will be available at /api/frontend/file/{file_path:path}.
+        """
+        import os
+        from pathlib import Path
+        from fastapi.responses import FileResponse
+        from fastapi import HTTPException
+
+        # Default to the same frontend directory as setup_static_files
+        base = Path(base_dir) if base_dir else Path(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))) / "frontend"
+        try:
+            base = base.resolve()
+        except Exception:
+            print(f"⚠️  Could not resolve base directory: {base}")
+            return
+
+        if not base.exists():
+            print(f"⚠️  Non-static base directory not found: {base}")
+            return
+
+        route_path = "/api/frontend/file/{file_path:path}"
+
+        # Avoid registering the same route multiple times
+        existing = [r for r in self.app.router.routes if getattr(r, "path", None) == route_path]
+        if existing:
+            print(f"ℹ️ Non-static file route already registered at {route_path}")
+            return
+
+        async def _serve_file(file_path: str):
+            try:
+                target = (base / file_path).resolve()
+
+                # Prevent path traversal: ensure target is inside the base dir
+                if not str(target).startswith(str(base)):
+                    raise HTTPException(status_code=400, detail="Invalid file path")
+
+                if not target.exists() or not target.is_file():
+                    raise HTTPException(status_code=404, detail="File not found")
+
+                return FileResponse(str(target))
+            except HTTPException:
+                raise
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=str(e))
+
+        # Register the route on the application
+        self.app.get(route_path)(_serve_file)
+        print(f"✅ Registered non-static file route at {route_path} serving from {base}")
+
+    def configure_frontend_serving(self, mode: str = "static", base_dir: Optional[str] = None):
+        """Convenience function to switch between static and non-static (dynamic) frontend serving.
+
+        mode: 'static' mounts StaticFiles at '/', 'nonstatic' (or 'dynamic') registers
+        a FileResponse-based route at '/api/frontend/file/{file_path:path}'.
+
+        This method will attempt to remove the previously-registered mount/route
+        for the alternate mode to avoid duplicates.
+        """
+        mode = (mode or "static").lower()
+
+        # Quick no-op if already configured
+        if getattr(self, "_frontend_mode", None) == mode:
+            print(f"ℹ️ Frontend already configured for mode '{mode}'")
+            return
+
+        # Remove previous registrations we control (static mount at '/' or our dynamic route)
+        try:
+            from starlette.routing import Mount, Route
+
+            new_routes = []
+            for r in list(self.app.router.routes):
+                path = getattr(r, "path", None)
+
+                # Remove static mount at root when switching to non-static
+                if isinstance(r, Mount) and path == "/" and mode != "static":
+                    continue
+
+                # Remove our dynamic route when switching to static
+                if isinstance(r, Route) and path == "/api/frontend/file/{file_path:path}" and mode == "static":
+                    continue
+
+                new_routes.append(r)
+
+            self.app.router.routes = new_routes
+        except Exception:
+            # If removal fails for any reason, continue and attempt to register the requested mode
+            pass
+
+        if mode == "static":
+            self.setup_static_files()
+        elif mode in ("nonstatic", "dynamic"):
+            self.setup_nonstatic_files(base_dir=base_dir)
+        else:
+            raise ValueError("mode must be 'static' or 'nonstatic'/'dynamic'")
+
+        self._frontend_mode = mode
+        print(f"✅ Frontend configured for mode '{mode}'")
             
     async def process_job(self, job_id: str, job_config: JobConfig):
         """Process email organization job with enhanced features"""

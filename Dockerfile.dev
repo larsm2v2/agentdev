@@ -14,8 +14,14 @@ WORKDIR /app
 
 # Install Python dependencies first (this layer changes less often)
 COPY requirements.docker.txt requirements.txt
+COPY install_transformers.py /app/
 RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt
+    grep -v "sentence-transformers" requirements.txt > requirements.filtered.txt && \
+    pip install --no-cache-dir -r requirements.filtered.txt
+
+# Add comment for installing sentence-transformers when needed
+# To install sentence-transformers with memory optimization, run:
+# python /app/install_transformers.py
 
 # Install development tools for faster iteration
 RUN pip install --no-cache-dir uvicorn[standard] watchdog

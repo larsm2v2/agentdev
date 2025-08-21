@@ -32,15 +32,16 @@ ENV HTTP_PROXY="" \
         https_proxy="" \
         NO_PROXY="pypi.org,files.pythonhosted.org,localhost,127.0.0.1"
 
-# If a wheelhouse was provided at build time (COPY wheelhouse /wheelhouse),
-# install from it to avoid network access. Otherwise install from PyPI.
-RUN if [ -d /wheelhouse ]; then \
-            python -m pip install --no-cache-dir --upgrade pip && \
-            pip install --no-cache-dir --no-index --find-links=/wheelhouse -r requirements.txt; \
-        else \
-            python -m pip install --no-cache-dir --upgrade pip && \
-            pip install --no-cache-dir -r requirements.txt; \
-        fi
+# Install dependencies but exclude sentence-transformers by default
+RUN python -m pip install --no-cache-dir --upgrade pip && \
+    grep -v "sentence-transformers" requirements.txt > requirements.filtered.txt && \
+    pip install --no-cache-dir -r requirements.filtered.txt
+
+# Copy the memory-optimized installer script
+COPY install_transformers.py /app/
+
+# Create a comment explaining how to install sentence-transformers if needed
+# To install sentence-transformers, run: python /app/install_transformers.py
 
 # Copy application code
 COPY . .
@@ -58,6 +59,7 @@ FROM base AS production
 
 # Copy requirements and install
 COPY requirements.docker.txt requirements.txt
+COPY install_transformers.py /app/
 # Ensure pip can reach PyPI directly even if Docker daemon has proxy configured
 ENV HTTP_PROXY="" \
         http_proxy="" \
@@ -65,14 +67,23 @@ ENV HTTP_PROXY="" \
         https_proxy="" \
         NO_PROXY="pypi.org,files.pythonhosted.org,localhost,127.0.0.1"
 
+# Filter out sentence-transformers from requirements
+RUN grep -v "sentence-transformers" requirements.txt > requirements.filtered.txt
+
 # Production: prefer wheelhouse if available to make builds deterministic and offline-capable
 RUN if [ -d /wheelhouse ]; then \
             python -m pip install --no-cache-dir --upgrade pip && \
-            pip install --no-cache-dir --no-index --find-links=/wheelhouse -r requirements.txt; \
+            pip install --no-cache-dir --no-index --find-links=/wheelhouse -r requirements.filtered.txt; \
         else \
             python -m pip install --no-cache-dir --upgrade pip && \
-            pip install --no-cache-dir -r requirements.txt; \
+            pip install --no-cache-dir -r requirements.filtered.txt; \
         fi
+
+# Copy the memory-optimized installer script
+COPY install_transformers.py /app/
+
+# Add comment about how to reinstall sentence-transformers later if needed
+RUN echo "# To install sentence-transformers with memory optimization, run: python /app/install_transformers.py" > /app/EMBEDDINGS.md
 
 # Copy only necessary application files
 COPY src/ ./src/
@@ -104,3 +115,16 @@ ENTRYPOINT ["./docker-entrypoint.sh"]
 
 # Default command
 CMD ["python", "-m", "src.core.enhanced_email_librarian_server"]
+
+#############################################
+# ML-enabled stage with sentence-transformers
+#############################################
+FROM production AS ml-enabled
+
+USER root
+# Install sentence-transformers with memory optimization
+RUN python /app/install_transformers.py
+USER app
+
+# This target can be built with:
+# docker build --target ml-enabled -t email-librarian-ml:latest .

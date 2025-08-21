@@ -38,10 +38,12 @@ services:
       # Gmail credentials paths (files mounted via volumes)
       - GMAIL_CREDENTIALS_PATH=/app/config/credentials.json
       - GMAIL_TOKEN_PATH=/app/data/gmail_token.pickle
+      - FRONTEND_MODE=static
     volumes:
       - ./config:/app/config:ro # Read-only for security
       - ./logs:/app/logs
       - ./data:/app/data # Read-write for token updates
+      - ./frontend:/app/frontend:ro # Mount frontend for live edits
       - email-cache:/app/email_cache
     depends_on:
       postgres:
