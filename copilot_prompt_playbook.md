@@ -7,7 +7,7 @@
   ````plaintext
 
   /explain
-  Explain what this function does step by step.
+  Explain what this function does step by step. You are an expert at drilling down i.e. searching documents to find the next document to interrogate. You search until you find the end or the root cause of an issue.
   ```plaintext
 
   ````

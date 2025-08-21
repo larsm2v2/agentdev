@@ -32,62 +32,9 @@ class EmailLibrarianController {
       workflows: {
         name: "Workflows",
         endpoint: "/workflows",
-        status: "active",
-        activeWorkflows: [
-          {
-            id: "wf_1",
-            name: "Daily Email Summary",
-            description: "Creates a daily digest of important emails",
-            active: true,
-            executions: 24,
-            lastRun: "2 hours ago",
-            schedule: "Daily at 8:00 AM",
-          },
-          {
-            id: "wf_2",
-            name: "Newsletter Categorizer",
-            description: "Automatically categorizes newsletter emails",
-            active: true,
-            executions: 156,
-            lastRun: "45 minutes ago",
-            schedule: "Every 4 hours",
-          },
-          {
-            id: "wf_3",
-            name: "Spam Detector",
-            description: "Advanced spam detection using ML",
-            active: false,
-            executions: 58,
-            lastRun: "Yesterday",
-            schedule: "Every hour",
-          },
-        ],
-        executionHistory: [
-          {
-            id: "ex_1",
-            workflowName: "Daily Email Summary",
-            status: "success",
-            timestamp: "2 hours ago",
-            details: "Processed 124 emails, created summary report",
-            showDetails: false,
-          },
-          {
-            id: "ex_2",
-            workflowName: "Newsletter Categorizer",
-            status: "success",
-            timestamp: "45 minutes ago",
-            details: "Categorized 37 newsletters into 8 categories",
-            showDetails: false,
-          },
-          {
-            id: "ex_3",
-            workflowName: "Spam Detector",
-            status: "warning",
-            timestamp: "Yesterday",
-            details: "Detected 12 spam emails, 2 false positives",
-            showDetails: false,
-          },
-        ],
+        status: "inactive",
+        activeWorkflows: [],
+        executionHistory: []
       },
     };
     this.eventListeners = {};
@@ -798,7 +745,7 @@ function enhancedEmailLibrarianApp() {
         this.showNotification("Failed to export data", "error");
       }
     },
-
+    
     toggleWorkflow(workflowId) {
       console.log(`Toggling workflow ${workflowId}`);
       const workflow = this.functions.workflows.activeWorkflows.find(
@@ -827,7 +774,6 @@ function enhancedEmailLibrarianApp() {
           status: "success",
           timestamp: "just now",
           details: "Manual execution completed successfully",
-          showDetails: false,
         });
 
         // Keep only last 10 executions
@@ -841,17 +787,6 @@ function enhancedEmailLibrarianApp() {
     refreshWorkflows() {
       console.log("Refreshing workflows...");
       // Here you would make API calls to refresh workflow data
-    },
-
-    toggleExecutionDetails(executionId) {
-      console.log(`Toggling execution details for ${executionId}`);
-      const execution = this.functions.workflows.executionHistory.find(
-        (e) => e.id === executionId
-      );
-      if (execution) {
-        // Toggle the showDetails property
-        execution.showDetails = !execution.showDetails;
-      }
     },
   };
 }

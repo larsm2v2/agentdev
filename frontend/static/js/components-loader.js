@@ -1,51 +1,71 @@
-// Component Loader Script
-document.addEventListener("DOMContentLoaded", () => {
-  console.log("Component Loader Script initialized");
+// Component Loader - Loads HTML components into containers
+class ComponentLoader {
+  constructor() {
+    // Force development mode
+    this.basePath = "/static/components/";
+    this.components = {
+      "status-notifications-container": "status-notifications.html",
+      "header-container": "header.html",
+      "function-cards-container": "function-cards.html",
+      "statistics-container": "statistics.html",
+      "tab-content-container": "tab-container.html",
+      "shelving-tab-container": "../tabs/shelving-tab.html",
+      "cataloging-tab-container": "../tabs/cataloging-tab.html",
+      "reclassification-tab-container": "../tabs/reclassification-tab.html",
+      "workflows-tab-container": "../tabs/workflows-tab.html",
+    };
+  }
 
-  // Function to load HTML components with container existence check
-  async function loadComponent(elementId, componentPath) {
-    const container = document.getElementById(elementId);
-
-    if (!container) {
-      console.error(`Container not found: ${elementId}`);
-      return;
-    }
-
+  async loadComponent(containerId, componentPath) {
     try {
-      console.log(`Loading component into ${elementId} from ${componentPath}`);
-      const response = await fetch(componentPath);
+      console.log(`📦 Loading component: ${componentPath} → #${containerId}`);
+      const response = await fetch(this.basePath + componentPath);
       if (!response.ok) {
         throw new Error(
           `Failed to load component: ${componentPath} (${response.status})`
         );
       }
       const html = await response.text();
-      container.innerHTML = html;
-      console.log(`Component loaded successfully: ${componentPath}`);
+      const container = document.getElementById(containerId);
+      if (container) {
+        container.innerHTML = html;
+        console.log(`✅ Loaded component: ${containerId}`);
+      } else {
+        console.warn(`⚠️ Container not found: ${containerId}`);
+      }
     } catch (error) {
-      console.error(
-        `Error loading component ${componentPath}: ${error.message}`
-      );
-      container.innerHTML = `
-        <div class="p-4 text-red-500">
-          <p>Error loading component: ${error.message}</p>
-        </div>
-      `;
+      console.error(`❌ Error loading component ${componentPath}:`, error);
     }
   }
 
-  // Wait a brief moment to ensure containers are properly initialized
-  setTimeout(() => {
-    // Load all components
-    loadComponent("shelving-tab-container", "/static/tabs/shelving-tab.html");
-    loadComponent(
-      "cataloging-tab-container",
-      "/static/tabs/cataloging-tab.html"
+  async loadAllComponents() {
+    const loadPromises = Object.entries(this.components).map(
+      ([containerId, componentPath]) =>
+        this.loadComponent(containerId, componentPath)
     );
-    loadComponent(
-      "reclassification-tab-container",
-      "/static/tabs/reclassification-tab.html"
-    );
-    loadComponent("workflows-tab-container", "/static/tabs/workflows-tab.html");
-  }, 100);
+
+    try {
+      await Promise.all(loadPromises);
+      console.log("All components loaded successfully");
+    } catch (error) {
+      console.error("Error loading components:", error);
+    }
+  }
+}
+
+// Auto-load components when DOM is ready
+document.addEventListener("DOMContentLoaded", async () => {
+  console.log("🔄 Starting component loading...");
+  const loader = new ComponentLoader();
+  await loader.loadAllComponents();
 });
+
+// Also try loading after Alpine.js is available
+document.addEventListener("alpine:init", async () => {
+  console.log("🔄 Alpine.js initialized, loading components...");
+  const loader = new ComponentLoader();
+  await loader.loadAllComponents();
+});
+
+// Export for potential future use
+window.ComponentLoader = ComponentLoader;

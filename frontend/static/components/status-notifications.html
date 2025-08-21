@@ -1,0 +1,65 @@
+<!-- Connection Status Indicator -->
+<div
+  class="connection-status"
+  :class="connectionStatus"
+  x-show="connectionStatus !== 'connected'"
+>
+  <i class="fas fa-circle mr-2"></i>
+  <span
+    x-text="connectionStatus.charAt(0).toUpperCase() + connectionStatus.slice(1)"
+  ></span>
+</div>
+
+<!-- Notification System -->
+<div class="fixed top-4 right-4 z-50 space-y-2" style="max-width: 300px">
+  <template x-for="notification in notifications" :key="notification.id">
+    <div
+      class="notification bg-white rounded-lg shadow-lg p-4 border-l-4"
+      :class="`border-${notification.type === 'success' ? 'green' : notification.type === 'error' ? 'red' : 'blue'}-500`"
+      x-transition:enter="transform ease-out duration-300 translate-x-full"
+      x-transition:enter-start="transform translate-x-full"
+      x-transition:enter-end="transform translate-x-0"
+      x-transition:leave="transform ease-in duration-200"
+      x-transition:leave-start="transform translate-x-0"
+      x-transition:leave-end="transform translate-x-full"
+    >
+      <div class="flex justify-between items-start">
+        <div class="flex items-start">
+          <i
+            :class="`fas ${notification.type === 'success' ? 'fa-check-circle text-green-500' : 
+                                          notification.type === 'error' ? 'fa-exclamation-circle text-red-500' : 
+                                          'fa-info-circle text-blue-500'} mr-2 mt-0.5`"
+          ></i>
+          <div>
+            <p
+              class="text-sm font-medium text-gray-900"
+              x-text="notification.message"
+            ></p>
+            <p
+              class="text-xs text-gray-500"
+              x-text="new Date(notification.timestamp).toLocaleTimeString()"
+            ></p>
+          </div>
+        </div>
+        <button
+          @click="dismissNotification(notification.id)"
+          class="text-gray-400 hover:text-gray-600"
+        >
+          <i class="fas fa-times"></i>
+        </button>
+      </div>
+    </div>
+  </template>
+</div>
+
+<!-- Loading Overlay -->
+<div
+  x-show="isLoading"
+  class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-40"
+  x-transition
+>
+  <div class="bg-white rounded-lg p-6 flex items-center space-x-3">
+    <div class="loading-spinner"></div>
+    <span class="text-gray-700">Processing...</span>
+  </div>
+</div>

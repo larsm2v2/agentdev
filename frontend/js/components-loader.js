@@ -1,19 +1,18 @@
 // Component Loader - Loads HTML components into containers
 class ComponentLoader {
   constructor() {
-    // Detect environment and set correct base path
-    const isDev = window.location.port === "8001";
-    this.basePath = isDev ? "components/" : "/frontend/components/";
+    // Force development mode
+    this.basePath = "/static/components/";
     this.components = {
       "status-notifications-container": "status-notifications.html",
       "header-container": "header.html",
       "function-cards-container": "function-cards.html",
       "statistics-container": "statistics.html",
       "tab-content-container": "tab-container.html",
-      "shelving-tab-container": "tabs/shelving-tab.html",
-      "cataloging-tab-container": "tabs/cataloging-tab.html",
-      "reclassification-tab-container": "tabs/reclassification-tab.html",
-      "workflows-tab-container": "tabs/workflows-tab.html",
+      "shelving-tab-container": "../tabs/shelving-tab.html",
+      "cataloging-tab-container": "../tabs/cataloging-tab.html",
+      "reclassification-tab-container": "../tabs/reclassification-tab.html",
+      "workflows-tab-container": "../tabs/workflows-tab.html",
     };
   }
 

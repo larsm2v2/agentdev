@@ -1,0 +1,42 @@
+<!-- Statistics Overview -->
+<div class="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
+  <div class="stats-card text-white rounded-lg p-6">
+    <div class="flex items-center justify-between">
+      <div>
+        <p class="text-white/80 text-sm">Emails Processed</p>
+        <p class="text-2xl font-bold" x-text="stats.totalProcessed"></p>
+      </div>
+      <i class="fas fa-envelope text-3xl text-white/60"></i>
+    </div>
+  </div>
+
+  <div class="stats-card blue text-white rounded-lg p-6">
+    <div class="flex items-center justify-between">
+      <div>
+        <p class="text-white/80 text-sm">Categories Created</p>
+        <p class="text-2xl font-bold" x-text="stats.categoriesCount"></p>
+      </div>
+      <i class="fas fa-folder text-3xl text-white/60"></i>
+    </div>
+  </div>
+
+  <div class="stats-card green text-white rounded-lg p-6">
+    <div class="flex items-center justify-between">
+      <div>
+        <p class="text-white/80 text-sm">Processing Speed</p>
+        <p class="text-2xl font-bold" x-text="stats.avgSpeed + '/min'"></p>
+      </div>
+      <i class="fas fa-tachometer-alt text-3xl text-white/60"></i>
+    </div>
+  </div>
+
+  <div class="stats-card purple text-white rounded-lg p-6">
+    <div class="flex items-center justify-between">
+      <div>
+        <p class="text-white/80 text-sm">Accuracy Rate</p>
+        <p class="text-2xl font-bold" x-text="stats.accuracyRate + '%'"></p>
+      </div>
+      <i class="fas fa-bullseye text-3xl text-white/60"></i>
+    </div>
+  </div>
+</div>

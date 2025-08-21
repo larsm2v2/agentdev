@@ -1,3 +1,4 @@
+// This will be replaced with enhancedEmailLibrarianApp() from email_librarian.js
 function emailLibrarianApp() {
   // Detect environment and set API base URL
   const isDev = window.location.port === "8001";

@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Email Librarian - AI-Powered Email Organization</title>
+    <link rel="stylesheet" href="/static/styles/output.css" />
+    <link rel="stylesheet" href="/static/styles/email_librarian.css" />
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link
+      rel="stylesheet"
+      href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css"
+    />
+
+    <script>
+      // Prevent Alpine.js from auto-starting
+      window.deferLoadingAlpine = true;
+
+      // Detect if we're in local development or production
+      const isDev = true; // Force development mode
+      const basePath = ""; // No prefix for local development
+
+      // Dynamically load CSS
+      const cssLink = document.createElement("link");
+      cssLink.rel = "stylesheet";
+      cssLink.href = `/static/styles/email_librarian.css`;
+      document.head.appendChild(cssLink);
+
+      // Include the core app functions directly
+      function emailLibrarianApp() {
+        return {
+          apiBaseUrl: "/api",
+          showTab: "workflows",
+          isLoading: false,
+          connectionStatus: "connected",
+          notifications: [],
+          functions: {
+            shelving: {
+              enabled: false,
+              processedToday: 127,
+              avgSpeed: 15,
+              config: {
+                interval: 2,
+                batchSize: 25,
+                autoArchive: true,
+              },
+              recentActivity: [],
+            },
+            workflows: {
+              name: "Workflows",
+              endpoint: "/workflows",
+              status: "active",
+              activeWorkflows: [
+                {
+                  id: "wf_1",
+                  name: "Daily Email Summary",
+                  description: "Creates a daily digest of important emails",
+                  active: true,
+                  executions: 24,
+                  lastRun: "2 hours ago",
+                  schedule: "Daily at 8:00 AM",
+                },
+                {
+                  id: "wf_2",
+                  name: "Weekly Analytics Report",
+                  description:
+                    "Generates analytics report from email interactions",
+                  active: false,
+                  executions: 8,
+                  lastRun: "5 days ago",
+                  schedule: "Weekly on Monday at 7:00 AM",
+                },
+              ],
+              executionHistory: [
+                {
+                  id: "ex_1",
+                  workflowName: "Daily Email Summary",
+                  status: "success",
+                  timestamp: "2 hours ago",
+                  details: "Processed 124 emails, created summary report",
+                  showDetails: false,
+                },
+                {
+                  id: "ex_2",
+                  workflowName: "Daily Email Summary",
+                  status: "warning",
+                  timestamp: "Yesterday",
+                  details:
+                    "Processed 118 emails with 3 warnings: 2 emails could not be parsed",
+                  showDetails: false,
+                },
+                {
+                  id: "ex_3",
+                  workflowName: "Weekly Analytics Report",
+                  status: "error",
+                  timestamp: "5 days ago",
+                  details:
+                    "Failed to connect to analytics service after 3 retries",
+                  showDetails: false,
+                },
+              ],
+              totalExecutions: 42,
+              successRate: 87,
+              avgDuration: 32,
+            },
+          },
+
+          init() {
+            console.log("Email Librarian App initialized");
+            this.loadComponents();
+          },
+
+          loadComponents() {
+            // Will be implemented by components-loader.js
+            console.log("Component loading requested");
+          },
+
+          toggleExecutionDetails(executionId) {
+            console.log("Toggle execution details for:", executionId);
+            const execution = this.functions.workflows.executionHistory.find(
+              (e) => e.id === executionId
+            );
+            if (execution) {
+              execution.showDetails = !execution.showDetails;
+            }
+          },
+
+          openN8nDashboard() {
+            console.log("Opening n8n dashboard");
+            window.open("/n8n/", "_blank");
+          },
+
+          refreshWorkflows() {
+            console.log("Refreshing workflow data");
+            this.isLoading = true;
+            // Simulate API call with a delay
+            setTimeout(() => {
+              this.isLoading = false;
+              console.log("Workflows refreshed");
+            }, 1000);
+          },
+
+          toggleWorkflow(id) {
+            const workflow = this.functions.workflows.activeWorkflows.find(
+              (w) => w.id === id
+            );
+            if (workflow) {
+              workflow.active = !workflow.active;
+              console.log(
+                `Workflow ${id} ${
+                  workflow.active ? "activated" : "deactivated"
+                }`
+              );
+            }
+          },
+
+          executeWorkflow(id) {
+            console.log(`Executing workflow ${id}`);
+            // Here you would normally trigger the workflow execution via API
+            const workflow = this.functions.workflows.activeWorkflows.find(
+              (w) => w.id === id
+            );
+            if (workflow) {
+              // Add execution to history
+              this.functions.workflows.executionHistory.unshift({
+                id: `ex_${Date.now()}`,
+                workflowName: workflow.name,
+                status: "success",
+                timestamp: "Just now",
+                details: `Manual execution of ${workflow.name} workflow completed successfully`,
+                showDetails: false,
+              });
+            }
+          },
+        };
+      }
+
+      function enhancedEmailLibrarianApp() {
+        return {
+          ...emailLibrarianApp(),
+          init() {
+            console.log("Enhanced Email Librarian App initialized");
+            this.loadComponents();
+          },
+        };
+      }
+
+      // Function to load scripts after DOM is ready
+      function loadScripts() {
+        const scripts = [`/static/js/components-loader.js`];
+
+        // Load scripts sequentially to ensure proper order
+        let scriptIndex = 0;
+
+        function loadNextScript() {
+          if (scriptIndex >= scripts.length) {
+            // All scripts loaded, now load and start Alpine.js
+            const alpineScript = document.createElement("script");
+            alpineScript.src =
+              "https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js";
+            alpineScript.onload = () => {
+              // Alpine.js will auto-start since we didn't defer it
+              console.log("All scripts and Alpine.js loaded successfully");
+              // Create a ComponentLoader instance directly to ensure components are loaded
+              if (window.ComponentLoader) {
+                console.log("Initializing ComponentLoader manually");
+                const loader = new window.ComponentLoader();
+                loader.loadAllComponents();
+              }
+            };
+            document.head.appendChild(alpineScript);
+            return;
+          }
+
+          const script = document.createElement("script");
+          script.src = scripts[scriptIndex];
+          script.onload = () => {
+            console.log(`Loaded: ${scripts[scriptIndex]}`);
+            scriptIndex++;
+            loadNextScript();
+          };
+          script.onerror = (error) => {
+            console.error(
+              `Failed to load script: ${scripts[scriptIndex]}`,
+              error
+            );
+            // Try to load from a fallback location
+            const fallbackScript = document.createElement("script");
+            fallbackScript.src = `/frontend${scripts[scriptIndex]}`;
+            fallbackScript.onload = () => {
+              console.log(`Loaded from fallback: ${scripts[scriptIndex]}`);
+              scriptIndex++;
+              loadNextScript();
+            };
+            fallbackScript.onerror = () => {
+              console.error(
+                `Failed to load script from fallback: ${scripts[scriptIndex]}`
+              );
+              scriptIndex++;
+              loadNextScript();
+            };
+            document.body.appendChild(fallbackScript);
+          };
+          document.body.appendChild(script);
+        }
+
+        loadNextScript();
+      }
+
+      // Load scripts when DOM is ready
+      if (document.readyState === "loading") {
+        document.addEventListener("DOMContentLoaded", loadScripts);
+      } else {
+        loadScripts();
+      }
+    </script>
+  </head>
+  <body class="bg-gray-50 min-h-screen">
+    <div
+      x-data="enhancedEmailLibrarianApp()"
+      x-init="init()"
+      class="min-h-screen"
+    >
+      <!-- Connection Status & Notifications -->
+      <div id="status-notifications-container">Loading status...</div>
+
+      <!-- Header -->
+      <div id="header-container">Loading header...</div>
+
+      <!-- Main Content -->
+      <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        <!-- Function Cards Grid -->
+        <div id="function-cards-container">Loading function cards...</div>
+
+        <!-- Statistics Overview -->
+        <div id="statistics-container">Loading statistics...</div>
+
+        <!-- Tab Content -->
+        <div id="tab-content-container">Loading tabs...</div>
+      </div>
+    </div>
+  </body>
+</html>
