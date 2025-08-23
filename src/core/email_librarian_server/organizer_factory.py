@@ -1,0 +1,143 @@
+"""
+Factory for creating Gmail organizer instances.
+"""
+
+import logging
+import sys
+from typing import Dict, Any, Optional, Union, Protocol, cast
+from pathlib import Path
+
+logger = logging.getLogger(__name__)
+
+# Define the protocol that Gmail organizers must follow
+class GmailOrganizerProtocol(Protocol):
+    """Protocol defining the required interface for Gmail organizers."""
+    
+    def authenticate(self) -> bool:
+        """Authenticate with Gmail API."""
+        ...
+        
+    def search_messages(self, query: str, max_results: int = 100) -> Dict[str, Any]:
+        """Search Gmail messages by query."""
+        ...
+        
+    def get_message(self, msg_id: str, format: str = "full") -> Dict[str, Any]:
+        """Get a specific Gmail message by ID."""
+        ...
+        
+    def create_label(self, label_name: str) -> Dict[str, Any]:
+        """Create a new Gmail label."""
+        ...
+        
+    def apply_label(self, msg_id: str, label_id: str) -> bool:
+        """Apply a label to a message."""
+        ...
+
+
+# Lightweight stub implementation for when real organizers aren't available
+class OrganizerStub:
+    """Stub implementation of the Gmail organizer interface."""
+    
+    def __init__(self):
+        self.service = None
+        self.labels = {}
+        
+    def authenticate(self) -> bool:
+        logger.warning("Using stub Gmail organizer - authentication not available")
+        return False
+        
+    def search_messages(self, query: str, max_results: int = 100) -> Dict[str, Any]:
+        logger.warning("Using stub Gmail organizer - search not available")
+        return {"status": "error", "messages": [], "message": "Gmail organizer not available"}
+        
+    def get_message(self, msg_id: str, format: str = "full") -> Dict[str, Any]:
+        logger.warning("Using stub Gmail organizer - get message not available")
+        return {"status": "error", "message": "Gmail organizer not available"}
+        
+    def create_label(self, label_name: str) -> Dict[str, Any]:
+        logger.warning("Using stub Gmail organizer - label creation not available")
+        return {"status": "error", "message": "Gmail organizer not available"}
+        
+    def apply_label(self, msg_id: str, label_id: str) -> bool:
+        logger.warning("Using stub Gmail organizer - label application not available")
+        return False
+
+
+class OrganizerFactory:
+    """Factory for creating Gmail organizer instances."""
+    
+    def __init__(self, credentials_path: str = 'config/credentials.json', token_path: str = 'data/gmail_token.pickle'):
+        """
+        Initialize the organizer factory.
+        
+        Args:
+            credentials_path: Path to the Google API credentials JSON
+            token_path: Path to the token pickle file
+        """
+        self.credentials_path = credentials_path
+        self.token_path = token_path
+        
+        # Check if organizers are available
+        try:
+            sys.path.append('.')
+            sys.path.append('./src/gmail')
+            sys.path.append('./src/core')
+            
+            # Try to import the organizers
+            from src.gmail.fast_gmail_organizer import HighPerformanceGmailOrganizer
+            from src.gmail.gmail_organizer import GmailAIOrganizer
+            self.high_performance_organizer = HighPerformanceGmailOrganizer
+            self.standard_organizer = GmailAIOrganizer
+            self.organizers_available = True
+            logger.info("✅ Gmail organizers available")
+        except ImportError as e:
+            logger.warning(f"⚠️ Gmail organizers not available: {e}")
+            self.high_performance_organizer = None
+            self.standard_organizer = None
+            self.organizers_available = False
+            
+        # Try to import container-compatible Gmail categories
+        try:
+            from container_gmail_categories import (
+                ContainerGmailCategories,
+                get_container_gmail_categories,
+                get_container_batch_emails_with_fields,
+                get_container_batch_emails_with_storage
+            )
+            self.container_gmail_categories = ContainerGmailCategories
+            self.get_container_gmail_categories = get_container_gmail_categories
+            self.get_container_batch_emails_with_fields = get_container_batch_emails_with_fields
+            self.get_container_batch_emails_with_storage = get_container_batch_emails_with_storage
+            self.container_gmail_available = True
+            logger.info("✅ Container Gmail categories available")
+        except ImportError as e:
+            logger.warning(f"⚠️ Container Gmail categories not available: {e}")
+            self.container_gmail_categories = None
+            self.get_container_gmail_categories = None
+            self.get_container_batch_emails_with_fields = None
+            self.get_container_batch_emails_with_storage = None
+            self.container_gmail_available = False
+    
+    def create_organizer(self, organizer_type: str = "high_performance") -> Any:
+        """
+        Create a Gmail organizer instance.
+        
+        Args:
+            organizer_type: Type of organizer to create ("high_performance" or "standard")
+            
+        Returns:
+            Gmail organizer instance or stub if not available
+        """
+        if not self.organizers_available:
+            logger.warning("Gmail organizers not available, returning stub")
+            return OrganizerStub()
+            
+        if organizer_type == "high_performance" and self.high_performance_organizer:
+            logger.info("Creating high performance Gmail organizer")
+            return self.high_performance_organizer(credentials_file=self.credentials_path)
+        elif organizer_type == "standard" and self.standard_organizer:
+            logger.info("Creating standard Gmail organizer")
+            return self.standard_organizer(credentials_file=self.credentials_path)
+        else:
+            logger.warning(f"Unknown organizer type '{organizer_type}', returning stub")
+            return OrganizerStub()
