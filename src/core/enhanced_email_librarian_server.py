@@ -4,86 +4,76 @@ Enhanced Email Librarian Backend Server
 Enterprise-grade FastAPI server with n8n, Qdrant, PostgreSQL, LangFuse, and CrewAI integration
 """
 
+# Standard library imports
 import asyncio
 import json
-import logging
-import pickle
 import hashlib
+import importlib
+import logging
+import os
+import pickle
+import secrets
+import sys
+import threading
 import time
+import urllib.parse
+import uuid
+import uvicorn
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Dict, List, Any, Optional, Union, Tuple
-from typing import Dict, Any, List, Optional, Union, Tuple, cast
 from typing import Dict, List, Any, Optional, Union, Tuple, cast, Protocol
-import uuid
-import os
-from contextlib import asynccontextmanager
+import types as _types
 
+# Third-party imports
+import asyncpg
+import databases
+import httpx
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, BackgroundTasks, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, HTMLResponse, PlainTextResponse, RedirectResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
-import logging
-import uvicorn
+from typing_extensions import Annotated
 
-# Database integrations
-import asyncpg
+# Database related imports
 from sqlalchemy import create_engine, Column, Integer, String, DateTime, JSON, Boolean, Text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.dialects.postgresql import UUID
-import databases
 
 # Vector database
 from qdrant_client import AsyncQdrantClient
 from qdrant_client.models import Distance, VectorParams, PointStruct, Filter, FieldCondition, Range
 
 # Gmail API - direct imports (no complex dependencies)
-import pickle
 from google.auth.transport.requests import Request as GoogleRequest
 from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
+from google_auth_oauthlib.flow import InstalledAppFlow, Flow
 from googleapiclient.discovery import build
 
-# Configure logging early so imports and startup code can safely use logger
-# (logging configured later with file + stream handlers)
-
-# Direct LLM integration (no LangChain) - make optional
+# Optional imports with fallbacks
+# Direct LLM integration (no LangChain)
 try:
     from .direct_llm_providers import MultiLLMManager, LLMProvider
     from .modern_email_agents import ModernEmailAgents
     LLM_AVAILABLE = True
 except Exception:
-    # LLM providers are optional; ensure names exist and mark as unavailable
     MultiLLMManager = LLMProvider = ModernEmailAgents = None
     LLM_AVAILABLE = False
 
-# Observability (LangFuse - simplified/removed for now)
+# Observability (LangFuse)
 LANGFUSE_AVAILABLE = False
 Langfuse = None
 LangfuseCallbackHandler = None
 
-# TODO: Re-enable LangFuse when dependencies are properly configured
-
-# Gmail API Configuration
-GMAIL_SCOPES = [
-    'https://www.googleapis.com/auth/gmail.readonly',
-    'https://www.googleapis.com/auth/gmail.labels', 
-    'https://www.googleapis.com/auth/gmail.modify'
-]
-
 # CrewAI (optional)
-# Provide a safe fallback BaseTool so static type checkers and runtime code always have a class to reference.
 class _FallbackBaseTool:
     def __init__(self, name: str, description: str):
         self.name = name
         self.description = description
 
-# Expose BaseTool as a dynamic symbol (typing as Any avoids strict class-equality checks)
 BaseTool: Any = _FallbackBaseTool
-
-# Default CrewAI symbols - will be overridden if the optional package is available
 Agent = Task = Crew = Process = None
 CREWAI_AVAILABLE = False
 
@@ -91,19 +81,14 @@ try:
     from crewai import Agent as _Agent, Task as _Task, Crew as _Crew, Process as _Process
     Agent, Task, Crew, Process = _Agent, _Task, _Crew, _Process
     try:
-        # primary modern package layout
         from crewai.tools import BaseTool as _ImportedBaseTool
         BaseTool = _ImportedBaseTool
     except Exception:
-        # keep our fallback BaseTool (typed as Any)
         pass
     CREWAI_AVAILABLE = True
 except ImportError:
-    # keep defaults and fallback BaseTool
     CREWAI_AVAILABLE = False
 
-# Backwards-compatible attempt to import an alternative package name some environments use
-import importlib
 try:
     _mod = importlib.import_module("crewai_tools")
     _ImportedBaseTool = getattr(_mod, "BaseTool", None)
@@ -114,6 +99,58 @@ try:
         CREWAI_TOOLS_AVAILABLE = False
 except Exception:
     CREWAI_TOOLS_AVAILABLE = False
+
+# Path setup for Gmail organizers
+sys.path.append('.')
+sys.path.append('./src/gmail')
+sys.path.append('./src/core')
+
+try:
+    from src.gmail.fast_gmail_organizer import HighPerformanceGmailOrganizer
+    from src.gmail.gmail_organizer import GmailAIOrganizer
+    GMAIL_ORGANIZERS_AVAILABLE = True
+except ImportError:
+    try:
+        from ..gmail.fast_gmail_organizer import HighPerformanceGmailOrganizer
+        from ..gmail.gmail_organizer import GmailAIOrganizer
+        GMAIL_ORGANIZERS_AVAILABLE = True
+    except ImportError:
+        print("❌ Could not import Gmail organizers - categories will use direct API")
+        HighPerformanceGmailOrganizer = GmailAIOrganizer = None
+        GMAIL_ORGANIZERS_AVAILABLE = False
+
+# Import container-compatible Gmail categories
+try:
+    from .container_gmail_categories import (
+        ContainerGmailCategories, 
+        get_container_gmail_categories,
+        get_container_batch_emails_with_fields,
+        get_container_batch_emails_with_storage,
+        get_container_batch_emails,
+        get_container_batch_emails_ultra_batch_http,
+        search_emails_by_content
+    )
+    CONTAINER_GMAIL_AVAILABLE = True
+    print("✅ Container Gmail categories and batch email retrieval available")
+except ImportError as e:
+    print(f"❌ Container Gmail categories not available: {e}")
+    ContainerGmailCategories = get_container_gmail_categories = None
+    get_container_batch_emails_with_fields = None
+    get_container_batch_emails_with_storage = None
+    get_container_batch_emails = None
+    get_container_batch_emails_ultra_batch_http = None
+    search_emails_by_content = None
+    CONTAINER_GMAIL_AVAILABLE = False
+
+# Configure logging early so imports and startup code can safely use logger
+# (logging configured later with file + stream handlers)
+
+# Gmail API Configuration
+GMAIL_SCOPES = [
+    'https://www.googleapis.com/auth/gmail.readonly',
+    'https://www.googleapis.com/auth/gmail.labels', 
+    'https://www.googleapis.com/auth/gmail.modify'
+]
 
 
 # Lightweight organizer stub used as a safe default so code can access
@@ -176,49 +213,7 @@ class GmailOrganizerProtocol(Protocol):
     def _apply_category_label(self, *args, **kwargs) -> Any: ...
 
 
-# n8n integration
-import httpx
-from typing_extensions import Annotated
 
-# OAuth2 and Google Auth imports
-from google_auth_oauthlib.flow import Flow
-import secrets
-import urllib.parse
-
-# Import our Gmail organizers (optional for categories endpoint)
-import sys
-sys.path.append('.')
-sys.path.append('./src/gmail')
-sys.path.append('./src/core')
-
-try:
-    from src.gmail.fast_gmail_organizer import HighPerformanceGmailOrganizer
-    from src.gmail.gmail_organizer import GmailAIOrganizer
-    GMAIL_ORGANIZERS_AVAILABLE = True
-except ImportError:
-    try:
-        from ..gmail.fast_gmail_organizer import HighPerformanceGmailOrganizer
-        from ..gmail.gmail_organizer import GmailAIOrganizer
-        GMAIL_ORGANIZERS_AVAILABLE = True
-    except ImportError:
-        print("❌ Could not import Gmail organizers - categories will use direct API")
-        HighPerformanceGmailOrganizer = GmailAIOrganizer = None
-        GMAIL_ORGANIZERS_AVAILABLE = False
-
-# Import container-compatible Gmail categories
-try:
-    from .container_gmail_categories import (
-        ContainerGmailCategories, 
-        get_container_gmail_categories,
-        get_container_batch_emails_with_fields
-    )
-    CONTAINER_GMAIL_AVAILABLE = True
-    print("✅ Container Gmail categories and batch email retrieval available")
-except ImportError as e:
-    print(f"❌ Container Gmail categories not available: {e}")
-    ContainerGmailCategories = get_container_gmail_categories = None
-    get_container_batch_emails_with_fields = None
-    CONTAINER_GMAIL_AVAILABLE = False
 
 # Configure logging
 logging.basicConfig(
@@ -454,7 +449,6 @@ class EnhancedEmailLibrarianServer:
         }
 
         # Thread-safe Gmail API access
-        import threading
         self._gmail_lock = threading.Lock()
 
         # OAuth flow for Gmail authentication
@@ -2300,26 +2294,42 @@ class EnhancedEmailLibrarianServer:
                 
                 if result["status"] == "success":
                     emails = result["emails"]
-                    storage_info = result.get("storage", {})
+                    storage_info = result.get("storage")
+                    if storage_info is None or not isinstance(storage_info, dict):
+                        storage_info = {}
                     
                     # Log activity with storage details
+                    activity_data = {
+                        "emails_count": len(emails),
+                        "query_used": query or "in:inbox",
+                        "batch_size": batch_size
+                    }
+                    
+                    # Safely add storage info if it's a dictionary
+                    if isinstance(storage_info, dict):
+                        activity_data.update({
+                            "storage_enabled": storage_info.get("storage_enabled", False),
+                            "api_call_id": storage_info.get("api_call_id", "N/A"),
+                            "stored_in": storage_info.get("stored_in", [])
+                        })
+                    else:
+                        activity_data["storage_info_type"] = type(storage_info).__name__
+                        
                     self.add_activity(
                         "storage_enabled_retrieval",
                         f"Retrieved {len(emails)} emails with full storage integration",
-                        {
-                            "emails_count": len(emails),
-                            "storage_enabled": storage_info.get("storage_enabled", False),
-                            "api_call_id": storage_info.get("api_call_id"),
-                            "stored_in": storage_info.get("stored_in", []),
-                            "query_used": query or "in:inbox",
-                            "batch_size": batch_size
-                        }
+                        activity_data
                     )
                     
                     logger.info(f"💾 Storage-enabled retrieval: {len(emails)} emails")
-                    if storage_info.get("storage_enabled"):
-                        logger.info(f"📊 Stored in: {', '.join(storage_info.get('stored_in', []))}")
-                        logger.info(f"🔢 API Call ID: {storage_info.get('api_call_id')}")
+                    if isinstance(storage_info, dict) and storage_info.get("storage_enabled"):
+                        stored_in = storage_info.get('stored_in', [])
+                        api_call_id = storage_info.get('api_call_id', 'N/A')
+                        if isinstance(stored_in, list):
+                            logger.info(f"📊 Stored in: {', '.join(stored_in)}")
+                        else:
+                            logger.info(f"📊 Stored in: {stored_in}")
+                        logger.info(f"🔢 API Call ID: {api_call_id}")
                     
                     return {
                         "status": "success",
@@ -3296,30 +3306,43 @@ class EnhancedEmailLibrarianServer:
 
                     # Import the new efficient batch method
                     try:
-                        from src.core.container_gmail_categories import get_container_batch_emails_with_storage
-
-                        # Use efficient batch retrieval with storage integration
-                        batch_result = await get_container_batch_emails_with_storage(
-                            batch_size=10,  # Process 10 unread emails at a time
-                            query=query
-                        )
-
+                        if get_container_batch_emails_with_storage is not None and callable(get_container_batch_emails_with_storage):
+                            batch_result = await get_container_batch_emails_with_storage(
+                                batch_size=10,
+                                query=query
+                            )
+                        else:
+                            logger.error("get_container_batch_emails_with_storage is not available or not callable")
+                            batch_result = {"status": "error", "message": "Batch email retrieval function not available"}
+                            
                         if batch_result["status"] != "success":
                             logger.error(f"❌ Batch email retrieval failed: {batch_result.get('message', 'Unknown error')}")
                             continue
 
                         emails = batch_result.get("emails", [])
-                        storage_info = batch_result.get("storage", {})
-
-                        logger.info(f"📬 Retrieved {len(emails)} unread emails using batch method (API calls: {batch_result.get('summary', {}).get('api_calls', 'unknown')})")
-
+                        storage_info = batch_result.get("storage")
+                        if storage_info is None or not isinstance(storage_info, dict):
+                            storage_info = {}
+                        api_calls = 'unknown'
+                        
+                        if isinstance(batch_result, dict):
+                            summary = batch_result.get('summary', {})
+                            if isinstance(summary, dict):
+                                api_calls = summary.get('api_calls', 'unknown')
+                        else:
+                            logger.info(f"📬 Retrieved {len(emails)} unread emails using batch method (API calls: {api_calls})")
                         if len(emails) == 0:
                             logger.info("✅ No new emails to process")
                             continue
 
                         # Log storage integration success
-                        if storage_info:
-                            logger.info(f"💾 Storage integration: PostgreSQL ID {storage_info.get('postgresql_id')}, Qdrant stored: {storage_info.get('qdrant_stored', 0)} vectors")
+                        if storage_info and isinstance(storage_info, dict):
+                            postgresql_id = storage_info.get('postgresql_id', 'N/A')
+                            qdrant_stored = storage_info.get('qdrant_stored', 0)
+                            logger.info(f"💾 Storage integration: PostgreSQL ID {postgresql_id}, Qdrant stored: {qdrant_stored} vectors")
+                        elif storage_info:
+                            # Handle case where storage_info is not a dictionary
+                            logger.info(f"💾 Storage integration available: {type(storage_info).__name__}")
 
                     except ImportError:
                         logger.warning("⚠️ New batch method not available, falling back to individual API calls")
@@ -3357,42 +3380,51 @@ class EnhancedEmailLibrarianServer:
                     successful_processing = 0
 
                     for i, email_data in enumerate(emails):
-                        logger.info(f"📄 Processing email {i+1}/{len(emails)}: {email_data['id']}")
+                        if isinstance(email_data, dict):
+                            email_id = email_data.get('id', 'unknown_id')
+                            subject = email_data.get('subject', '')
+                            sender = email_data.get('sender', '')
+                        else:
+                            email_id = str(email_data)
+                            subject = ''
+                            sender = ''
+                        logger.info(f"📄 Processing email {i+1}/{len(emails)}: {email_id}")
 
                         try:
-                            logger.info(f"📧 Email details - Subject: '{email_data['subject'][:50]}', From: '{email_data['sender'][:30]}'")
-
+                            logger.info(f"📧 Email details - Subject: '{subject[:50]}', From: '{sender[:30]}'")
                             # Check cache first
-                            cached_classification = self._get_cached_classification(email_data)
+                            if isinstance(email_data, dict):
+                                cached_classification = self._get_cached_classification(email_data)
+                            else:
+                                cached_classification = None
                             if cached_classification:
-                                logger.info(f"💾 Using cached classification for email {email_data['id'][:12]}")
+                                logger.info(f"💾 Using cached classification for email {email_id[:12]}")
                                 # Apply cached label
                                 with self._gmail_lock:
-                                    self._apply_category_label_safe(email_data['id'], cached_classification.get('category', 'other'))
+                                    self._apply_category_label_safe(email_id, cached_classification.get('category', 'other'))
                                 successful_processing += 1
                             else:
                                 # Process with AI if not cached
-                                logger.info(f"🤖 Starting AI processing for email {email_data['id'][:12]}")
-
-                                # Create a mini shelving job for this email
-                                mini_job_config = JobConfig(
-                                    job_type="shelving",
-                                    parameters={
-                                        "max_emails": 1,
-                                        "batch_size": 1,
-                                        "message_ids": [email_data['id']],
-                                        "enable_logging": True,
-                                        "email_data": email_data  # Pass email data for caching
-                                    }
-                                )
-
-                                batch_job_id = f"{job_id}_email_{email_data['id']}"
+                                logger.info(f"🤖 Starting AI processing for email {email_id[:12]}")
+                                  # Create a mini shelving job for this email
+                            mini_job_config = JobConfig(
+                                job_type="shelving",
+                                parameters={
+                                    "max_emails": 1,
+                                    "batch_size": 1,
+                                    "message_ids": [email_id],
+                                    "enable_logging": True,
+                                    "email_data": email_data  # Pass email data for caching
+                                }
+                            )
+                            if isinstance(email_data, dict):
+                                batch_job_id = f"{job_id}_email_{email_data.get('id', 'unknown')}"
                                 await self.process_job(batch_job_id, mini_job_config)
                                 successful_processing += 1
-                            logger.info(f"✅ Completed processing email {email_data['id']}")
-
+                                logger.info(f"✅ Completed processing email {email_data.get('id', 'unknown')}")
                         except Exception as e:
-                            logger.error(f"❌ Failed to process email {email_data['id']}: {e}")
+                            if isinstance(email_data, dict):
+                                logger.error(f"❌ Failed to process email {email_data.get('id', 'unknown')}: {e}")
                             continue
 
                     # Calculate processing performance with batch efficiency tracking
@@ -3476,7 +3508,7 @@ class EnhancedEmailLibrarianServer:
         try:
             logger.info(f"⚡ Using new efficient batch method for cataloging with storage integration")
             
-            # Import your new batching method
+
             if not CONTAINER_GMAIL_AVAILABLE:
                 return {
                     "processed_count": 0,
@@ -3487,18 +3519,28 @@ class EnhancedEmailLibrarianServer:
                     "message": "Container Gmail integration not available"
                 }
             
-            from src.core.container_gmail_categories import get_container_batch_emails_with_storage
+     
             
             # Build Gmail query for date range
             gmail_query = f"after:{start_date} before:{end_date}"
             logger.info(f"📅 Cataloging date range: {start_date} to {end_date} with query: {gmail_query}")
             
-            # Use your new efficient batching method with storage integration
-            result = await get_container_batch_emails_with_storage(
-                batch_size=batch_size,
-                query=gmail_query
-            )
-            
+            if get_container_batch_emails_with_storage is not None and callable(get_container_batch_emails_with_storage):
+                result = await get_container_batch_emails_with_storage(
+                    batch_size=batch_size,
+                    query=gmail_query
+                )
+            else:
+                logger.error("get_container_batch_emails_with_storage is not available or not callable")
+                return {
+                    "processed_count": 0,
+                    "categorized_count": 0,
+                    "categories_created": [],
+                    "job_type": "cataloging",
+                    "status": "error",
+                    "message": "Batch email retrieval function not available"
+                }
+          
             if result["status"] != "success":
                 return {
                     "processed_count": 0,
@@ -3564,9 +3606,9 @@ class EnhancedEmailLibrarianServer:
                 },
                 "performance": {
                     "batch_size": batch_size,
-                    "api_calls": storage_info.get("api_calls_used", "unknown"),
-                    "storage_enabled": storage_info.get("storage_enabled", False),
-                    "stored_in": storage_info.get("stored_in", [])
+                    "api_calls": isinstance(storage_info, dict) and storage_info.get("api_calls_used", "unknown") or "unknown",
+                    "storage_enabled": isinstance(storage_info, dict) and storage_info.get("storage_enabled", False) or False,
+                    "stored_in": isinstance(storage_info, dict) and storage_info.get("stored_in", []) or []
                 }
             }
             
@@ -3586,7 +3628,6 @@ class EnhancedEmailLibrarianServer:
         try:
             logger.info(f"📧 Using new efficient batching method as fallback")
             
-            # Import your new batching method
             if not CONTAINER_GMAIL_AVAILABLE:
                 return {
                     "processed_count": 0,
@@ -3597,21 +3638,30 @@ class EnhancedEmailLibrarianServer:
                     "message": "Container Gmail integration not available"
                 }
             
-            from src.core.container_gmail_categories import get_container_batch_emails_with_storage
+
             
             # Build Gmail query for date range
             gmail_query = f"after:{start_date} before:{end_date}"
             logger.info(f"📅 Basic cataloging with date range: {start_date} to {end_date}")
             
-            # Use your new efficient batching method
+              # Use your new efficient batching method
             batch_result = {}
-            result = await get_container_batch_emails_with_storage(
-                batch_size=batch_size,
-                query=gmail_query
-            )
+            if get_container_batch_emails_with_storage is not None and callable(get_container_batch_emails_with_storage):
+                result = await get_container_batch_emails_with_storage(
+                    batch_size=batch_size,
+                    query=gmail_query
+                )
+            else:
+                logger.error("get_container_batch_emails_with_storage is not available or not callable")
+                result = {
+                    "status": "error",
+                    "message": "Batch email retrieval function not available",
+                    "emails": [],
+                    "storage": {}
+                }
             # Mirror to batch_result so later code that checks locals() sees it bound
             batch_result = result or {}
-            
+          
             if result["status"] != "success":
                 return {
                     "processed_count": 0,
@@ -3760,7 +3810,7 @@ class EnhancedEmailLibrarianServer:
     def add_activity(self, activity_type: str, message: str, metadata: Optional[Dict] = None):
         """Add a new activity to the recent activities list"""
         try:
-            from datetime import datetime
+
             
             activity = {
                 "id": str(uuid.uuid4()),
@@ -3820,7 +3870,6 @@ class EnhancedEmailLibrarianServer:
     def get_formatted_timestamp(self, iso_timestamp: str) -> str:
         """Convert ISO timestamp to human-readable format"""
         try:
-            from datetime import datetime
             
             timestamp = datetime.fromisoformat(iso_timestamp.replace('Z', '+00:00'))
             now = datetime.now(timestamp.tzinfo)
@@ -3848,7 +3897,7 @@ class EnhancedEmailLibrarianServer:
     
     def _get_content_hash(self, email_data: Dict) -> str:
         """Generate hash for email content for caching"""
-        import hashlib
+   
         content = f"{email_data.get('subject', '')}{email_data.get('sender', '')}{email_data.get('body', '')[:500]}"
         return hashlib.md5(content.encode()).hexdigest()
     
@@ -4252,12 +4301,12 @@ def main():
     # Create and return app instance for uvicorn
     return EnhancedEmailLibrarianServer().app
 
-# Create module-level app for uvicorn direct import (development)
+
 app = main()
 
 if __name__ == "__main__":
     # Run with uvicorn for development
-    import uvicorn
+
     uvicorn.run(
         "src.core.enhanced_email_librarian_server:app",
         host="0.0.0.0",  
