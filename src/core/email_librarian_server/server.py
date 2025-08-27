@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Dict, List, Any, Optional, Union, cast
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, BackgroundTasks, Depends, Request
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, BackgroundTasks, Depends, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, HTMLResponse, RedirectResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -21,6 +21,9 @@ from .organizer_factory import OrganizerFactory
 from .job_manager import JobManager
 from .job_processors import ShelvingJobProcessor, CatalogingJobProcessor
 from .api_router import APIRouter
+from ..metrics.endpoint import register_metrics
+from ...dashboard.metrics_integration import metrics_collector as dashboard_metrics_collector
+
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +50,7 @@ class EnhancedEmailLibrarianServer:
             credentials_path=self.config.get("credentials_path", "config/credentials.json")
         )
         self.job_manager = JobManager(
-            database=None,  # Will be set after database initialization
+            storage_manager=self.storage_manager,
             organizer_factory=self.organizer_factory
         )
         self.api_router = None  # Will be set after FastAPI app is created
@@ -100,6 +103,13 @@ class EnhancedEmailLibrarianServer:
         if frontend_serving_mode == "static":
             # Serve static frontend files
             app.mount("/dashboard", StaticFiles(directory="frontend", html=True), name="frontend")
+            # Also expose absolute /static paths for assets referenced by the frontend
+            static_dir = Path("frontend") / "static"
+            if static_dir.exists():
+                app.mount("/static", StaticFiles(directory=str(static_dir), html=False), name="frontend_static")
+            else:
+                # Fallback: expose frontend root at /static so older paths still resolve
+                app.mount("/static", StaticFiles(directory="frontend", html=False), name="frontend_static")
             
             # Redirect root to dashboard
             @app.get("/")
@@ -122,6 +132,13 @@ class EnhancedEmailLibrarianServer:
                     return FileResponse(file_path)
                 return FileResponse("frontend/dashboard/index.html")
                 
+        try:
+            # pass the dashboard metrics collector so /metrics/summary works
+            register_metrics(app, metrics_collector=dashboard_metrics_collector)
+        except Exception:
+            # don't crash server if metrics registration fails
+            pass
+        
         # Store the app
         self.app = app
         return app
@@ -149,8 +166,10 @@ class EnhancedEmailLibrarianServer:
         )
         self.job_manager.register_processor("cataloging", cataloging_processor)
         
-        # Add initial activity
-        await self.add_activity("system", "Email Librarian server started and ready", {"version": "2.0.0"})
+    # Initial activity broadcasting has been disabled at startup to avoid
+    # database writes or early broadcast races during service initialization.
+    # If you want to re-enable broadcast-only notifications here, add a
+    # non-blocking broadcast call or trigger it from an external health check.
         
         logger.info("✅ Enhanced Email Librarian Server started")
         
@@ -272,36 +291,17 @@ class EnhancedEmailLibrarianServer:
             description: Activity description
             details: Additional details
         """
+        # Activity logging to database has been disabled. We still broadcast
+        # activity messages to connected WebSocket clients for real-time UI updates.
         try:
-            if self.storage_manager.database is None:
-                logger.warning("Cannot add activity: database not initialized")
-                return
-                
-            query = """
-            INSERT INTO activity_log (activity_type, description, details, created_at)
-            VALUES (:activity_type, :description, :details, :created_at)
-            RETURNING id
-            """
-            
-            values = {
-                "activity_type": activity_type,
-                "description": description,
-                "details": json.dumps(details) if details else None,
-                "created_at": datetime.now().isoformat()
-            }
-            
-            result = await self.storage_manager.database.execute(query, values)
-            
-            # Broadcast activity to WebSocket clients
+            created_at = datetime.now().isoformat()
             await self.broadcast_message("activity", {
-                "id": str(result),
+                "id": None,
                 "activity_type": activity_type,
                 "description": description,
                 "details": details,
-                "created_at": values["created_at"]
+                "created_at": created_at
             })
-            
-            return result
         except Exception as e:
-            logger.error(f"Error adding activity: {e}")
-            return None
+            logger.error(f"Failed to broadcast activity: {e}")
+        return None

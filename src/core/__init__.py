@@ -14,13 +14,11 @@ This package contains:
 try:
     from .direct_llm_providers import MultiLLMManager, LLMProvider
     from .modern_email_agents import ModernEmailAgents
-    from .simple_email_agents import SimpleEmailAgentSystem
     
     __all__ = [
         'MultiLLMManager',
         'LLMProvider', 
         'ModernEmailAgents',
-        'SimpleEmailAgentSystem'
     ]
 except ImportError as e:
     # Handle import errors gracefully during development

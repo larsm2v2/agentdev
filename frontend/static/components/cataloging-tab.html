@@ -1,411 +1,364 @@
 <!-- Cataloging Tab -->
-<div class="p-6">
-  <div class="flex items-center mb-6">
-    <i class="fas fa-archive text-2xl text-green-500 mr-3"></i>
-    <h2 class="text-2xl font-bold text-white">
-      Cataloging - Email Library Organization
-    </h2>
-  </div>
+<div x-data="catalogingController()" x-init="init()" class="space-y-6 p-4">
+  <!-- Date Range and Batch Size Controls -->
+  <div class="bg-white p-6 rounded-lg shadow-sm border border-gray-200">
+    <h3 class="text-lg font-medium text-gray-900 mb-4">
+      Cataloging Configuration
+    </h3>
 
-  <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-    <div>
-      <h3 class="text-lg font-semibold mb-4">Batch Processing</h3>
-      <div class="space-y-4">
-        <div>
-          <label class="block text-sm font-medium text-gray-700 mb-2"
-            >Date Range</label
-          >
-          <div class="grid grid-cols-2 gap-2">
-            <input
-              type="date"
-              x-model="functions.cataloging.config.startDate"
-              class="border border-gray-300 rounded-md px-3 py-2"
-            />
-            <input
-              type="date"
-              x-model="functions.cataloging.config.endDate"
-              class="border border-gray-300 rounded-md px-3 py-2"
-            />
-          </div>
-        </div>
-        <div>
-          <label class="block text-sm font-medium text-gray-700 mb-2"
-            >Batch Size</label
-          >
-          <input
-            type="number"
-            x-model="functions.cataloging.config.batchSize"
-            class="w-full border border-gray-300 rounded-md px-3 py-2"
-            min="10"
-            max="500"
-          />
-        </div>
-
-        <!-- Category Retrieval Button -->
-        <div class="mb-4">
-          <button
-            @click="retrieveGmailCategories()"
-            class="w-full bg-blue-600 text-white py-2 px-4 rounded-md hover:bg-blue-700 transition-colors"
-          >
-            <i class="fas fa-tags mr-2"></i>Retrieve Gmail Categories (1 API
-            call)
-          </button>
-        </div>
-
-        <div class="flex gap-2">
-          <button
-            @click="startCataloging()"
-            :disabled="functions.cataloging.enabled"
-            class="flex-1 bg-green-600 text-white py-2 px-4 rounded-md hover:bg-green-700 transition-colors disabled:bg-gray-400 disabled:cursor-not-allowed"
-          >
-            <i class="fas fa-play mr-2"></i>Start Cataloging
-          </button>
-          <button
-            @click="stopCataloging()"
-            :disabled="!functions.cataloging.enabled"
-            class="flex-1 bg-red-600 text-white py-2 px-4 rounded-md hover:bg-red-700 transition-colors disabled:bg-gray-400 disabled:cursor-not-allowed"
-          >
-            <i class="fas fa-stop mr-2"></i>Stop
-          </button>
-        </div>
-
-        <!-- API Calls Monitoring -->
-        <div class="mt-4 p-3 bg-blue-50 border border-blue-200 rounded-md">
-          <div class="flex items-center justify-between">
-            <div class="flex items-center">
-              <i class="fas fa-chart-line text-blue-500 mr-2"></i>
-              <span class="text-sm font-medium text-blue-900">API Calls</span>
-            </div>
-            <div class="text-right">
-              <div
-                class="text-lg font-bold text-blue-900"
-                x-text="functions.cataloging.apiCalls || 0"
-              ></div>
-              <div class="text-xs text-blue-600">Total Calls</div>
-            </div>
-          </div>
-          <div class="mt-2 grid grid-cols-2 gap-4 text-xs">
-            <div>
-              <span class="text-blue-600">Rate:</span>
-              <span
-                class="font-semibold text-blue-900"
-                x-text="(functions.cataloging.apiCallsPerMinute || 0) + '/min'"
-              ></span>
-            </div>
-            <div>
-              <span class="text-blue-600">Quota:</span>
-              <span
-                class="font-semibold text-blue-900"
-                x-text="(functions.cataloging.quotaUsed || 0) + '%'"
-              ></span>
-            </div>
-          </div>
-        </div>
+    <!-- Date Range -->
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+      <div>
+        <label class="block text-sm font-medium text-gray-700 mb-1"
+          >Start Date</label
+        >
+        <input
+          type="date"
+          x-model="startDate"
+          class="w-full border-gray-300 rounded-md shadow-sm focus:border-blue-500 focus:ring-blue-500"
+        />
+      </div>
+      <div>
+        <label class="block text-sm font-medium text-gray-700 mb-1"
+          >End Date</label
+        >
+        <input
+          type="date"
+          x-model="endDate"
+          class="w-full border-gray-300 rounded-md shadow-sm focus:border-blue-500 focus:ring-blue-500"
+        />
       </div>
     </div>
 
-    <!-- Available Categories Section -->
-    <div x-show="functions.cataloging.availableCategories" class="mt-6">
-      <h3 class="text-lg font-semibold mb-4">
-        <i class="fas fa-tags mr-2 text-blue-500"></i>Available Gmail Categories
-      </h3>
-      <div class="bg-gray-50 border border-gray-200 rounded-md p-4">
-        <!-- Categories Summary -->
-        <div class="grid grid-cols-3 gap-4 mb-4 text-center text-sm">
-          <div class="bg-blue-100 rounded p-2">
-            <div
-              class="font-bold text-blue-900"
-              x-text="functions.cataloging.availableCategories?.user_labels?.length || 0"
-            ></div>
-            <div class="text-blue-600">Custom Labels</div>
-          </div>
-          <div class="bg-green-100 rounded p-2">
-            <div
-              class="font-bold text-green-900"
-              x-text="functions.cataloging.availableCategories?.system_labels?.length || 0"
-            ></div>
-            <div class="text-green-600">System Labels</div>
-          </div>
-          <div class="bg-purple-100 rounded p-2">
-            <div
-              class="font-bold text-purple-900"
-              x-text="functions.cataloging.availableCategories?.total_count || 0"
-            ></div>
-            <div class="text-purple-600">Total Labels</div>
-          </div>
-        </div>
+    <!-- Batch Size -->
+    <div class="mb-4">
+      <label class="block text-sm font-medium text-gray-700 mb-1"
+        >Batch Size</label
+      >
+      <div class="flex items-center space-x-2">
+        <input
+          type="range"
+          x-model.number="batchSize"
+          min="5"
+          max="100"
+          step="5"
+          class="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+        />
+        <span
+          class="text-sm font-medium text-gray-600 w-10 text-center"
+          x-text="batchSize"
+        ></span>
+      </div>
+    </div>
 
-        <!-- User-Created Labels -->
-        <div
-          x-show="functions.cataloging.availableCategories?.user_labels?.length > 0"
-          class="mb-4"
-        >
-          <h4 class="font-medium text-gray-700 mb-2">Custom Categories:</h4>
-          <div class="flex flex-wrap gap-2">
-            <template
-              x-for="label in functions.cataloging.availableCategories?.user_labels || []"
-              :key="label.id"
-            >
-              <span
-                class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-800"
-              >
-                <span x-text="label.name"></span>
-                <span
-                  class="ml-1 text-blue-600"
-                  x-text="'(' + (label.messagesTotal || 0) + ')'"
-                ></span>
-              </span>
-            </template>
-          </div>
-        </div>
+    <!-- Category Management Strategy -->
+    <div class="mb-4">
+      <label class="block text-sm font-medium text-gray-700 mb-1"
+        >Category Strategy</label
+      >
+      <select
+        x-model="categoryStrategy"
+        class="w-full border-gray-300 rounded-md shadow-sm focus:border-blue-500 focus:ring-blue-500"
+      >
+        <option value="auto">
+          Automatic (Use existing + create new when needed)
+        </option>
+        <option value="strict">Strict (Only use existing categories)</option>
+        <option value="regenerate">
+          Regenerate All (Create new categories for all emails)
+        </option>
+      </select>
+    </div>
 
-        <!-- System Labels -->
+    <!-- Toggle Control -->
+    <div class="flex justify-between items-center mt-6">
+      <span class="text-sm font-medium text-gray-700">Enable Cataloging</span>
+      <button
+        @click="toggleCataloging()"
+        :class="catalogingActive ? 'bg-blue-600' : 'bg-gray-200'"
+        class="relative inline-flex items-center h-6 rounded-full w-11 transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+      >
+        <span
+          :class="catalogingActive ? 'translate-x-6' : 'translate-x-1'"
+          class="inline-block w-4 h-4 transform bg-white rounded-full transition-transform"
+        ></span>
+      </button>
+    </div>
+  </div>
+
+  <!-- Progress Section -->
+  <div
+    x-show="catalogingActive || catalogingCompleted"
+    class="bg-white p-6 rounded-lg shadow-sm border border-gray-200"
+  >
+    <h3 class="text-lg font-medium text-gray-900 mb-4">
+      <span x-show="catalogingActive">Cataloging Progress</span>
+      <span x-show="!catalogingActive && catalogingCompleted"
+        >Cataloging Results</span
+      >
+    </h3>
+
+    <!-- Progress Bar -->
+    <div x-show="catalogingActive" class="mb-4">
+      <div class="w-full bg-gray-200 rounded-full h-2.5 mb-2">
         <div
-          x-show="functions.cataloging.availableCategories?.system_labels?.length > 0"
-          class="mb-2"
-        >
-          <h4 class="font-medium text-gray-700 mb-2">System Categories:</h4>
-          <div class="flex flex-wrap gap-2">
-            <template
-              x-for="label in functions.cataloging.availableCategories?.system_labels || []"
-              :key="label.id"
-            >
-              <span
-                class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800"
-              >
-                <span x-text="label.name"></span>
-                <span
-                  class="ml-1 text-green-600"
-                  x-text="'(' + (label.messagesTotal || 0) + ')'"
-                ></span>
-              </span>
-            </template>
-          </div>
+          class="bg-blue-600 h-2.5 rounded-full"
+          :style="`width: ${progress * 100}%`"
+        ></div>
+      </div>
+      <div class="flex justify-between text-xs text-gray-500">
+        <span
+          x-text="`${processedCount} of ${totalCount} emails processed`"
+        ></span>
+        <span x-text="`${Math.round(progress * 100)}%`"></span>
+      </div>
+    </div>
+
+    <!-- Results Summary -->
+    <div x-show="catalogingCompleted" class="space-y-4">
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div class="bg-gray-50 p-3 rounded-md">
+          <div class="text-xs text-gray-500">Processed</div>
+          <div
+            class="text-xl font-semibold"
+            x-text="results.processed_count || 0"
+          ></div>
+        </div>
+        <div class="bg-gray-50 p-3 rounded-md">
+          <div class="text-xs text-gray-500">Categorized</div>
+          <div
+            class="text-xl font-semibold"
+            x-text="results.categorized_count || 0"
+          ></div>
+        </div>
+        <div class="bg-gray-50 p-3 rounded-md">
+          <div class="text-xs text-gray-500">New Categories</div>
+          <div
+            class="text-xl font-semibold"
+            x-text="results.categories_created?.length || 0"
+          ></div>
         </div>
       </div>
 
-      <!-- Processing Status -->
-      <div class="bg-gray-50 border border-gray-200 rounded-md p-4 mt-4">
-        <div class="flex justify-between items-center mb-4">
-          <div class="flex items-center">
-            <i
-              class="fas"
-              :class="functions.cataloging.enabled ? 'fa-play-circle text-green-500' : 'fa-pause-circle text-gray-400'"
-            ></i>
-            <span
-              class="ml-2 font-medium"
-              :class="functions.cataloging.enabled ? 'text-green-800' : 'text-gray-600'"
-              x-text="functions.cataloging.enabled ? 'Processing Active' : 'Ready to Start'"
-            ></span>
-          </div>
+      <!-- Categories Created -->
+      <div x-show="results.categories_created?.length > 0" class="mt-4">
+        <h4 class="text-sm font-medium text-gray-700 mb-2">
+          New Categories Created:
+        </h4>
+        <div class="flex flex-wrap gap-2">
           <span
-            class="text-sm"
-            :class="functions.cataloging.enabled ? 'text-green-600' : 'text-gray-500'"
-            x-text="functions.cataloging.enabled ? 'RUNNING' : 'IDLE'"
+            x-for="category in results.categories_created"
+            class="px-2 py-1 bg-blue-100 text-blue-800 text-xs font-medium rounded"
+            x-text="category"
           ></span>
         </div>
+      </div>
 
-        <!-- Progress Bar -->
-        <div>
-          <div class="flex justify-between text-sm mb-1">
-            <span>Overall Progress</span>
-            <span x-text="functions.cataloging.progress + '%'"></span>
-          </div>
-          <div class="w-full bg-gray-200 rounded-full h-2 progress-bar">
-            <div
-              class="progress-bar-fill bg-green-600 h-2 rounded-full transition-all duration-300"
-              :style="`width: ${functions.cataloging.progress}%`"
-            ></div>
-          </div>
-        </div>
-
-        <!-- Statistics Grid -->
-        <div class="grid grid-cols-2 gap-4 text-sm">
-          <div>
-            <span class="text-gray-600">Processed:</span>
-            <span
-              class="font-semibold ml-1"
-              x-text="functions.cataloging.processed"
-            ></span>
-          </div>
-          <div>
-            <span class="text-gray-600">Remaining:</span>
-            <span
-              class="font-semibold ml-1"
-              x-text="functions.cataloging.remaining"
-            ></span>
-          </div>
-          <div>
-            <span class="text-gray-600">Speed:</span>
-            <span
-              class="font-semibold ml-1"
-              x-text="(functions.cataloging.processingRate || 0) + '/min'"
-            ></span>
-          </div>
-          <div>
-            <span class="text-gray-600">ETA:</span>
-            <span
-              class="font-semibold ml-1"
-              x-text="functions.cataloging.estimatedTime || 'N/A'"
-            ></span>
-          </div>
-        </div>
-
-        <!-- Categories Found -->
-        <div
-          x-show="functions.cataloging.categoriesFound && functions.cataloging.categoriesFound.length > 0"
-        >
-          <h4 class="text-sm font-medium text-gray-700 mb-2">
-            Categories Discovered
-          </h4>
-          <div class="flex flex-wrap gap-1">
-            <template
-              x-for="category in (functions.cataloging.categoriesFound || []).slice(0, 8)"
-              :key="category"
-            >
-              <span
-                class="inline-block px-2 py-1 text-xs bg-blue-100 text-blue-800 rounded-full"
-                x-text="category"
-              ></span>
-            </template>
-            <span
-              x-show="(functions.cataloging.categoriesFound || []).length > 8"
-              class="inline-block px-2 py-1 text-xs bg-gray-100 text-gray-600 rounded-full"
-              x-text="`+${(functions.cataloging.categoriesFound || []).length - 8} more`"
-            ></span>
-          </div>
+      <!-- Categories Used -->
+      <div x-show="results.categories_used?.length > 0" class="mt-4">
+        <h4 class="text-sm font-medium text-gray-700 mb-2">
+          Existing Categories Used:
+        </h4>
+        <div class="flex flex-wrap gap-2">
+          <span
+            x-for="category in results.categories_used"
+            class="px-2 py-1 bg-green-100 text-green-800 text-xs font-medium rounded"
+            x-text="category"
+          ></span>
         </div>
       </div>
     </div>
   </div>
 
-  <!-- API Calls Log Section -->
-  <div class="mt-8">
-    <div class="flex items-center justify-between mb-4">
-      <h3 class="text-lg font-semibold text-white">API Calls Log</h3>
-      <div class="flex space-x-2">
-        <button
-          @click="refreshApiLog()"
-          class="px-3 py-1 bg-blue-600 text-white text-sm rounded-md hover:bg-blue-700 transition-colors"
-        >
-          <i class="fas fa-refresh mr-1"></i>Refresh
-        </button>
-        <button
-          @click="simulateApiLogEntries()"
-          class="px-3 py-1 bg-purple-600 text-white text-sm rounded-md hover:bg-purple-700 transition-colors"
-        >
-          <i class="fas fa-flask mr-1"></i>Demo Data
-        </button>
-        <button
-          @click="exportApiLog()"
-          class="px-3 py-1 bg-gray-600 text-white text-sm rounded-md hover:bg-gray-700 transition-colors"
-        >
-          <i class="fas fa-download mr-1"></i>Export
-        </button>
-      </div>
-    </div>
-
-    <div class="bg-gray-800 rounded-lg p-4">
-      <!-- API Stats Summary -->
-      <div class="grid grid-cols-4 gap-4 mb-4 text-center">
-        <div class="bg-blue-900 rounded p-3">
-          <div
-            class="text-2xl font-bold text-blue-300"
-            x-text="functions.cataloging.apiCalls || 0"
-          ></div>
-          <div class="text-xs text-blue-400">Total Calls</div>
-        </div>
-        <div class="bg-green-900 rounded p-3">
-          <div
-            class="text-2xl font-bold text-green-300"
-            x-text="(functions.cataloging.apiLog || []).filter(log => log.status === 'success').length"
-          ></div>
-          <div class="text-xs text-green-400">Successful</div>
-        </div>
-        <div class="bg-red-900 rounded p-3">
-          <div
-            class="text-2xl font-bold text-red-300"
-            x-text="(functions.cataloging.apiLog || []).filter(log => log.status === 'error').length"
-          ></div>
-          <div class="text-xs text-red-400">Failed</div>
-        </div>
-        <div class="bg-yellow-900 rounded p-3">
-          <div
-            class="text-2xl font-bold text-yellow-300"
-            x-text="(functions.cataloging.apiCallsPerMinute || 0).toFixed(1)"
-          ></div>
-          <div class="text-xs text-yellow-400">Calls/Min</div>
-        </div>
-      </div>
-
-      <!-- API Log Entries -->
-      <div
-        class="bg-black rounded-lg p-4 h-64 overflow-y-auto font-mono text-sm"
+  <!-- Category Management -->
+  <div class="bg-white p-6 rounded-lg shadow-sm border border-gray-200">
+    <h3 class="text-lg font-medium text-gray-900 mb-4">
+      Category Management
+      <button
+        @click="loadCategories()"
+        class="ml-2 text-sm text-blue-600 hover:text-blue-800"
       >
-        <div class="text-green-400 mb-2">
-          📊 Gmail API Calls Log - Last 50 entries
-        </div>
-        <template
-          x-for="(logEntry, index) in (functions.cataloging.apiLog || []).slice(-50).reverse()"
-          :key="index"
+        <i class="fas fa-sync-alt"></i> Refresh
+      </button>
+    </h3>
+
+    <!-- Categories List -->
+    <div class="space-y-2">
+      <div
+        x-show="categories.length === 0"
+        class="text-sm text-gray-500 italic"
+      >
+        No categories found. Start cataloging to create categories.
+      </div>
+
+      <div
+        x-show="categories.length > 0"
+        class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3"
+      >
+        <div
+          x-for="category in categories"
+          class="flex items-center justify-between bg-gray-50 p-2 rounded"
         >
-          <div
-            class="mb-1 flex items-start space-x-2"
-            :class="logEntry.status === 'error' ? 'text-red-400' : 'text-green-300'"
-          >
+          <div>
+            <span x-text="category.name" class="text-sm font-medium"></span>
             <span
-              class="text-gray-500 text-xs w-20"
-              x-text="logEntry.timestamp"
-            ></span>
-            <span
-              class="w-16 text-xs"
-              :class="logEntry.status === 'error' ? 'text-red-400' : 'text-blue-400'"
-              x-text="logEntry.method"
-            ></span>
-            <span class="flex-1" x-text="logEntry.endpoint"></span>
-            <span
-              class="w-12 text-xs"
-              :class="logEntry.status === 'error' ? 'text-red-400' : 'text-green-400'"
-              x-text="logEntry.status"
-            ></span>
-            <span
-              class="w-16 text-xs text-gray-400"
-              x-text="logEntry.duration + 'ms'"
+              x-text="`(${category.count})`"
+              class="text-xs text-gray-500 ml-1"
             ></span>
           </div>
-        </template>
-        <div
-          x-show="!functions.cataloging.apiLog || functions.cataloging.apiLog.length === 0"
-          class="text-gray-500 text-center py-8"
-        >
-          No API calls logged yet. Start cataloging to see live API activity.
-        </div>
-      </div>
-
-      <!-- API Performance Metrics -->
-      <div class="mt-4 grid grid-cols-3 gap-4 text-xs">
-        <div class="bg-gray-700 rounded p-2">
-          <div class="text-gray-300">Average Response Time</div>
-          <div
-            class="text-white font-bold"
-            x-text="(functions.cataloging.avgResponseTime || 0) + 'ms'"
-          ></div>
-        </div>
-        <div class="bg-gray-700 rounded p-2">
-          <div class="text-gray-300">Rate Limit Remaining</div>
-          <div
-            class="text-white font-bold"
-            x-text="functions.cataloging.rateLimitRemaining || 'N/A'"
-          ></div>
-        </div>
-        <div class="bg-gray-700 rounded p-2">
-          <div class="text-gray-300">Last API Call</div>
-          <div
-            class="text-white font-bold"
-            x-text="functions.cataloging.lastApiCall || 'Never'"
-          ></div>
+          <button
+            @click="editCategory(category)"
+            class="text-gray-400 hover:text-gray-600"
+          >
+            <i class="fas fa-pencil-alt"></i>
+          </button>
         </div>
       </div>
     </div>
   </div>
 </div>
+
+<script>
+  function catalogingController() {
+    return {
+      // Configuration
+      startDate: null,
+      endDate: null,
+      batchSize: 20,
+      categoryStrategy: "auto",
+
+      // Status
+      catalogingActive: false,
+      catalogingCompleted: false,
+      progress: 0,
+      processedCount: 0,
+      totalCount: 0,
+      results: {},
+      categories: [],
+
+      // Job ID for polling
+      activeJobId: null,
+      pollingInterval: null,
+
+      init() {
+        // Set default date range (last 7 days)
+        const today = new Date();
+        const lastWeek = new Date(today);
+        lastWeek.setDate(lastWeek.getDate() - 7);
+
+        this.endDate = today.toISOString().split("T")[0];
+        this.startDate = lastWeek.toISOString().split("T")[0];
+
+        // Load categories
+        this.loadCategories();
+      },
+
+      async toggleCataloging() {
+        if (this.catalogingActive) {
+          // Stop polling when turned off
+          this.stopCataloging();
+        } else {
+          // Start cataloging
+          this.catalogingActive = true;
+          this.catalogingCompleted = false;
+          this.progress = 0;
+          this.processedCount = 0;
+          this.totalCount = 0;
+          this.results = {};
+
+          try {
+            const response = await fetch("/api/functions/cataloging/start", {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({
+                batch_size: this.batchSize,
+                date_range: {
+                  start: this.startDate ? `${this.startDate}T00:00:00Z` : null,
+                  end: this.endDate ? `${this.endDate}T23:59:59Z` : null,
+                },
+                strategy: this.categoryStrategy,
+              }),
+            });
+
+            const data = await response.json();
+
+            if (data.status === "success") {
+              this.activeJobId = data.job.job_id;
+              this.startPolling();
+            } else {
+              throw new Error(data.message || "Failed to start cataloging");
+            }
+          } catch (error) {
+            console.error("Error starting cataloging:", error);
+            this.catalogingActive = false;
+            alert(`Failed to start cataloging: ${error.message}`);
+          }
+        }
+      },
+
+      startPolling() {
+        // Poll every 2 seconds
+        this.pollingInterval = setInterval(() => this.pollProgress(), 2000);
+      },
+
+      async pollProgress() {
+        try {
+          const response = await fetch("/api/functions/cataloging/progress");
+          const data = await response.json();
+
+          this.progress = data.progress || 0;
+          this.processedCount = data.processed_count || 0;
+          this.totalCount = data.total_count || 0;
+
+          // Check if completed
+          if (data.status === "completed") {
+            this.results = data.results || {};
+            this.catalogingCompleted = true;
+            this.stopCataloging();
+            this.loadCategories(); // Refresh categories
+          }
+
+          // Check if failed
+          if (data.status === "failed") {
+            this.stopCataloging();
+            alert("Cataloging job failed. Please check server logs.");
+          }
+
+          // If no active job but we're still polling, stop
+          if (data.status === "no_active_job") {
+            this.stopCataloging();
+          }
+        } catch (error) {
+          console.error("Error polling progress:", error);
+        }
+      },
+
+      stopCataloging() {
+        this.catalogingActive = false;
+        if (this.pollingInterval) {
+          clearInterval(this.pollingInterval);
+          this.pollingInterval = null;
+        }
+      },
+
+      async loadCategories() {
+        try {
+          const response = await fetch("/api/functions/cataloging/categories");
+          const data = await response.json();
+          this.categories = data.categories || [];
+        } catch (error) {
+          console.error("Error loading categories:", error);
+        }
+      },
+
+      editCategory(category) {
+        // In a real implementation, you'd open a modal for editing
+        alert(
+          `Edit category functionality will be implemented in a future update.`
+        );
+      },
+    };
+  }
+</script>

@@ -269,6 +269,58 @@
 
       <!-- Main Content -->
       <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        <!-- Gmail Authentication Banner -->
+        <div
+          class="bg-gray-800 rounded-xl shadow-sm border border-gray-600 mb-8"
+          x-show="!gmailAuthenticated"
+        >
+          <div class="p-6">
+            <div class="flex items-center justify-between">
+              <div>
+                <h3 class="text-lg font-semibold text-white">
+                  Gmail Authentication Required
+                </h3>
+                <p class="text-sm text-gray-300 mt-1">
+                  Connect your Gmail account to enable real email processing
+                </p>
+              </div>
+              <button
+                @click="authenticateGmail()"
+                class="bg-red-600 hover:bg-red-700 text-white px-6 py-3 rounded-lg font-medium transition-colors duration-200 flex items-center gap-2"
+              >
+                <i class="fab fa-google"></i>
+                Connect Gmail
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Gmail Auth Status Display -->
+        <div
+          class="bg-green-50 border border-green-200 rounded-xl p-4 mb-8"
+          x-show="gmailAuthenticated"
+        >
+          <div class="flex items-center gap-3">
+            <div class="text-green-600">
+              <i class="fas fa-check-circle text-xl"></i>
+            </div>
+            <div>
+              <h4 class="text-green-800 font-medium">Gmail Connected</h4>
+              <p class="text-green-600 text-sm">
+                Real email processing is now enabled
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Main Functions Panel -->
+        <div
+          class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8"
+          style="min-height: 280px"
+        >
+          <!-- ...existing function cards and content... -->
+        </div>
+
         <!-- Function Cards Grid -->
         <div id="function-cards-container">Loading function cards...</div>
 

@@ -22,10 +22,20 @@ from googleapiclient.errors import HttpError
 from bs4 import BeautifulSoup
 from dateutil import parser as date_parser
 
-# Optional email reply parsing
+# Email reply parsing
+email_reply_parser = None
 try:
-    import email_reply_parser
-    EMAIL_REPLY_PARSER_AVAILABLE = True
+    # Try different import paths for email_reply_parser
+    try:
+        from . import email_reply_parser
+        EMAIL_REPLY_PARSER_AVAILABLE = True
+    except ImportError:
+        try:
+            from gmail import email_reply_parser
+            EMAIL_REPLY_PARSER_AVAILABLE = True
+        except ImportError:
+            import gmail.email_reply_parser as email_reply_parser
+            EMAIL_REPLY_PARSER_AVAILABLE = True
 except ImportError:
     EMAIL_REPLY_PARSER_AVAILABLE = False
     print("ℹ️  email_reply_parser not available - using basic email cleaning")
@@ -34,10 +44,7 @@ except ImportError:
 try:
     from ..core.direct_llm_providers import MultiLLMManager
 except ImportError:
-    try:
-        from src.core.direct_llm_providers import MultiLLMManager
-    except ImportError:
-        from direct_llm_providers import MultiLLMManager
+    from src.core.direct_llm_providers import MultiLLMManager
 
 class GmailAIOrganizer:
     """Gmail AI-powered email organizer with multi-provider LLM support"""
@@ -246,8 +253,8 @@ class GmailAIOrganizer:
         """Clean email body for AI processing"""
         try:
             # Remove reply chains and signatures
-            if EMAIL_REPLY_PARSER_AVAILABLE:
-                import email_reply_parser
+            if EMAIL_REPLY_PARSER_AVAILABLE and email_reply_parser is not None:
+                # Use the email_reply_parser module to extract the original content
                 clean = email_reply_parser.EmailReplyParser.parse_reply(body)
             else:
                 # Basic cleaning without email_reply_parser

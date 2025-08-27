@@ -10,15 +10,19 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional, Union, Callable, Awaitable
 import asyncio
 
+from fastapi import WebSocket
+
 from .interfaces import JobProcessor
 from .organizer_factory import OrganizerFactory
+from .storage_manager import StorageManager
+from databases import Database as JobsDatabase
 
 logger = logging.getLogger(__name__)
 
 class JobManager:
     """Manages asynchronous email processing jobs."""
-    
-    def __init__(self, database, organizer_factory: OrganizerFactory):
+
+    def __init__(self, storage_manager: StorageManager, organizer_factory: OrganizerFactory):
         """
         Initialize the job manager.
         
@@ -26,11 +30,13 @@ class JobManager:
             database: Database connection
             organizer_factory: Factory for creating Gmail organizers
         """
-        self.database = database
+        self.storage_manager = storage_manager
+        self.database = storage_manager.database if storage_manager else None
         self.organizer_factory = organizer_factory
         self.active_jobs = {}
         self.job_processors = {}
-        
+        self.progress_clients = {}
+
     def register_processor(self, job_type: str, processor: JobProcessor):
         """
         Register a job processor for a specific job type.
@@ -56,6 +62,10 @@ class JobManager:
         job_id = str(uuid.uuid4())
         job_type = job_config.get("job_type", "unknown")
         
+         # Validate processor exists
+        if job_type not in self.job_processors:
+            logger.warning(f"No processor registered for job type: {job_type}")
+
         # Create job record
         job_record = {
             "id": job_id,
@@ -81,7 +91,13 @@ class JobManager:
             "created_at": job_record["created_at"],
             "parameters": job_config
         }
-        await self.database.execute(query, values)
+        if not self.database:
+            logger.warning("No database connection - job will only exist in memory")
+    
+        if self.database is not None:
+            await self.database.execute(query, values)
+        else:
+            logger.error("Database connection is not available. Cannot update job status.")
         
         # Schedule the job for processing
         background_tasks.add_task(self.process_job, job_id, job_config)
@@ -182,7 +198,7 @@ class JobManager:
         if results or error_message:
             query += ", results = :results"
             if results:
-                values["results"] = json.dumps(results)
+                values["results"] = json.dumps(results) if isinstance(results, dict) else str(results)
             elif error_message:
                 values["results"] = json.dumps({"error": error_message})
             
@@ -194,7 +210,10 @@ class JobManager:
         # Add WHERE clause
         query += " WHERE id = :id"
         
-        await self.database.execute(query, values)
+        if self.database is not None:
+            await self.database.execute(query, values)
+        else:
+            logger.error("Database connection is not available. Cannot update job status.")
         
     async def get_job_status(self, job_id: str) -> Dict[str, Any]:
         """
@@ -212,12 +231,17 @@ class JobManager:
             
         # Check database
         query = "SELECT * FROM email_processing_jobs WHERE id = :job_id"
-        job = await self.database.fetch_one(query, {"job_id": job_id})
-        
-        if job:
-            return dict(job)
+        if self.database is not None:
+            job = await self.database.fetch_one(query, {"job_id": job_id})
+            if job:
+                return dict(job)
+            else:
+                return {"status": "not_found", "message": f"Job {job_id} not found"}
         else:
-            return {"status": "not_found", "message": f"Job {job_id} not found"}
+            logger.error("Database connection is not available. Cannot retrieve job status.")
+            return {"status": "error", "message": "Database connection is not available."}
+            
+        
             
     async def list_jobs(self, limit: int = 100, job_type: Optional[str] = None) -> List[Dict[str, Any]]:
         """
@@ -239,6 +263,78 @@ class JobManager:
             
         query += " ORDER BY created_at DESC LIMIT :limit"
         values["limit"] = limit
+
+        if self.database is not None:
+            jobs = await self.database.fetch_all(query, values)
+            return [dict(job) for job in jobs]
+        else:
+            logger.error("Database connection is not available. Cannot list jobs.")
+            return []
+
+    def register_progress_client(self, job_id: str, websocket: WebSocket):
+        """Register a WebSocket client for progress updates."""
+        if job_id not in self.progress_clients:
+            self.progress_clients[job_id] = set()
+        self.progress_clients[job_id].add(websocket)
+
+    def unregister_progress_client(self, job_id: str, websocket: WebSocket):
+        """Unregister a WebSocket client."""
+        if job_id in self.progress_clients and websocket in self.progress_clients[job_id]:
+            self.progress_clients[job_id].remove(websocket)
         
-        jobs = await self.database.fetch_all(query, values)
-        return [dict(job) for job in jobs]
+    async def update_job_progress(self, job_id: str, processed: int, total: int):
+        """Update job progress and notify clients."""
+        # Update job record
+        job = self.active_jobs.get(job_id)
+        if job:
+            job["processed_count"] = processed
+            job["total_count"] = total
+            job["progress"] = processed / total if total > 0 else 0
+            job["updated_at"] = datetime.now().isoformat()
+            logger.info(f"📊 Job {job_id}: {processed}/{total} ({job['progress']:.1%})")
+            
+            # Store in database if available
+            if self.database:
+                try:
+                    await self.database.execute(
+                        """
+                        UPDATE email_processing_jobs 
+                        SET 
+                            processed_count = :processed, 
+                            total_count = :total,
+                            progress = :progress,
+                            updated_at = :updated_at
+                        WHERE id = :job_id
+                        """,
+                        {
+                            "processed": processed,
+                            "total": total,
+                            "progress": processed / total if total > 0 else 0,
+                            "updated_at": datetime.now().isoformat(),
+                            "job_id": job_id
+                        }
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to update job progress in database: {e}")
+                
+            # Notify WebSocket clients
+            if hasattr(self, 'progress_clients') and job_id in self.progress_clients:
+                status = await self.get_job_status(job_id)
+                for websocket in list(self.progress_clients[job_id]):
+                    try:
+                        await websocket.send_json(status)
+                    except Exception as e:
+                        logger.error(f"Failed to send progress update: {e}")
+                        # Client likely disconnected
+                        self.progress_clients[job_id].discard(websocket)
+
+    def get_active_job_id(self, job_type: str) -> Optional[str]:
+        #Get the ID of an active job of the specified type.
+        for job_id, job in self.active_jobs.items():
+            if job.get("job_type") == job_type and job.get("status") in ["pending", "processing"]:
+                return job_id
+        return None
+
+
+
+

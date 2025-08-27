@@ -13,6 +13,7 @@ RUN apt-get update && apt-get install -y \
     curl \
     netcat-traditional \
     git \
+    postgresql-client \
     && rm -rf /var/lib/apt/lists/*
 
 # Set working directory
@@ -45,9 +46,11 @@ COPY install_transformers.py /app/
 
 # Copy application code
 COPY . .
+COPY _db_startup_wait.sh /usr/local/bin/_db_startup_wait.sh
 
 # Make scripts executable
 RUN chmod +x docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/_db_startup_wait.sh
 
 # Development command
 CMD ["python", "-m", "uvicorn", "src.core.enhanced_email_librarian_server:app", "--host", "0.0.0.0", "--port", "8000"]
@@ -91,6 +94,7 @@ COPY config/ ./config/
 COPY migrations/ ./migrations/
 COPY frontend/ ./frontend/
 COPY docker-entrypoint.sh ./
+COPY _db_startup_wait.sh /usr/local/bin/_db_startup_wait.sh
 
 # Create app user for security
 RUN useradd --create-home --shell /bin/bash app
@@ -102,6 +106,7 @@ RUN mkdir -p logs data email_cache
 
 # Make entrypoint executable
 RUN chmod +x docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/_db_startup_wait.sh
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
@@ -114,7 +119,8 @@ EXPOSE 8000
 ENTRYPOINT ["./docker-entrypoint.sh"]
 
 # Default command
-CMD ["python", "-m", "src.core.enhanced_email_librarian_server"]
+#CMD ["python", "-m", "src.core.enhanced_email_librarian_server"] ###old version###
+CMD ["python", "-m", "src.core.email_librarian_server.main"]
 
 #############################################
 # ML-enabled stage with sentence-transformers

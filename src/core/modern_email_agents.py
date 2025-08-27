@@ -39,19 +39,9 @@ class EmailClassificationTool(BaseTool):
         Subject: {email_data.get('subject', 'No subject')}
         From: {email_data.get('sender', 'Unknown sender')}
         Content: {email_data.get('body', 'No content')[:500]}...
-        
-        Categories:
-        - work: Professional emails, meetings, projects
-        - personal: Family, friends, personal matters
-        - financial: Banking, payments, receipts, investments
-        - travel: Bookings, confirmations, itineraries
-        - shopping: Orders, receipts, promotions
-        - social: Social media notifications, community updates
-        - health: Medical appointments, health information
-        - education: Courses, learning materials, academic
-        - news: Newsletters, news updates
-        - other: Anything that doesn't fit above categories
-        
+
+        Categories: {email_data.get('categories', [])}
+
         Respond with JSON format:
         {{
             "category": "category_name",

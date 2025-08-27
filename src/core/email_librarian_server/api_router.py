@@ -4,8 +4,9 @@ API router for the Enhanced Email Librarian system.
 
 import logging
 from typing import Dict, List, Any, Optional, Union
-from fastapi import APIRouter as FastAPIRouter, BackgroundTasks, Depends, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi import APIRouter as FastAPIRouter, BackgroundTasks, Body, Depends, WebSocket, WebSocketDisconnect, HTTPException
 from pydantic import BaseModel
+import asyncio
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +69,18 @@ class APIRouter:
         self.router.get("/system/status")(self.get_system_status)
         self.router.get("/system/activity")(self.get_activity_log)
         
+        # Web Socket
+        self.router.websocket("/ws/jobs/{job_id}")(self.job_progress_websocket)
+        
+        # Polling Progress
+        self.router.get("/functions/shelving/progress")(self.get_shelving_progress)
+        
+        # Cataloging endpoints
+        self.router.post("/functions/cataloging/start")(self.start_cataloging)
+        self.router.get("/functions/cataloging/progress")(self.get_cataloging_progress)
+        self.router.get("/functions/cataloging/categories")(self.get_categories)
+
+        
     async def create_job(self, job_config: JobConfig, background_tasks: BackgroundTasks):
         """
         Create a new email processing job.
@@ -79,7 +92,7 @@ class APIRouter:
         Returns:
             Job creation result
         """
-        return await self.server.job_manager.create_job(job_config.dict(), background_tasks)
+        return await self.server.job_manager.create_job(job_config.model_dump(), background_tasks)
         
     async def get_job_status(self, job_id: str):
         """
@@ -205,6 +218,124 @@ class APIRouter:
         Returns:
             Activity log entries
         """
-        query = "SELECT * FROM activity_log ORDER BY created_at DESC LIMIT :limit"
-        activities = await self.server.storage_manager.database.fetch_all(query, {"limit": limit})
-        return {"activities": [dict(activity) for activity in activities]}
+        # Activity log storage has been disabled; return in-memory/broadcast-only activities
+        return {"activities": []}
+
+    async def job_progress_websocket(self, websocket: WebSocket, job_id: str):
+        """WebSocket endpoint for real-time job progress updates."""
+        await websocket.accept()
+        try:
+            # Register this connection with job manager
+            self.server.job_manager.register_progress_client(job_id, websocket)
+            
+            # Keep connection open
+            while True:
+                # Wait for client messages (ping)
+                data = await websocket.receive_text()
+                if data == "ping":
+                    # Send current status
+                    status = await self.server.job_manager.get_job_status(job_id)
+                    await websocket.send_json(status)
+                await asyncio.sleep(0.1)
+        except WebSocketDisconnect:
+            self.server.job_manager.unregister_progress_client(job_id, websocket)
+            logger.info(f"Client disconnected from job {job_id}")
+    
+    async def get_shelving_progress(self):
+        #Get current progress of active shelving job.
+        active_job_id = self.server.job_manager.get_active_job_id("shelving")
+        if not active_job_id:
+            return {"status": "no_active_job", "progress": 0}
+            
+        job_status = await self.server.job_manager.get_job_status(active_job_id)
+        
+        # Extract progress information
+        processed = job_status.get("processed_count", 0)
+        total = job_status.get("total_count", 1)  # Prevent division by zero
+        progress = processed / total if total > 0 else 0
+        
+        return {
+            "status": job_status.get("status", "unknown"),
+            "progress": progress,
+            "processed_count": processed,
+            "total_count": total,
+            "job_id": active_job_id
+        }
+        
+    async def start_cataloging(self, background_tasks: BackgroundTasks, parameters: Dict[str, Any] = Body(...)):
+        """
+        Start email cataloging process.
+        
+        Args:
+            background_tasks: FastAPI background tasks
+            parameters: Job parameters including batch size and date range
+            
+        Returns:
+            Job information
+        """
+        try:
+            # Create job config with parameters
+            job_config = {
+                "job_type": "cataloging",
+                "parameters": parameters
+            }
+            
+            # Create and start job
+            job_result = await self.server.job_manager.create_job(job_config, background_tasks)
+            
+            return {
+                "status": "success",
+                "message": "Cataloging started",
+                "job": job_result
+            }
+            
+        except Exception as e:
+            logger.error(f"Failed to start cataloging: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
+
+    async def get_cataloging_progress(self):
+        """Get current progress of active cataloging job."""
+        try:
+            active_job_id = self.server.job_manager.get_active_job_id("cataloging")
+            if not active_job_id:
+                return {"status": "no_active_job", "progress": 0}
+            
+            job_status = await self.server.job_manager.get_job_status(active_job_id)
+            
+            # Extract progress information
+            processed = job_status.get("processed_count", 0)
+            total = job_status.get("total_count", 1)  # Prevent division by zero
+            progress = processed / total if total > 0 else 0
+            
+            return {
+                "status": job_status.get("status", "unknown"),
+                "progress": progress,
+                "processed_count": processed,
+                "total_count": total,
+                "job_id": active_job_id,
+                "results": job_status.get("results", {})
+            }
+        except Exception as e:
+            logger.error(f"Error getting cataloging progress: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
+
+    async def get_categories(self):
+    # Get all available categories.
+        try:
+            if not self.server.storage_manager.database:
+                return {"categories": []}
+                
+            result = await self.server.storage_manager.database.fetch_all("""
+                SELECT category, COUNT(*) as count 
+                FROM emails 
+                WHERE category IS NOT NULL 
+                GROUP BY category 
+                ORDER BY count DESC
+            """)
+            
+            categories = [{"name": row["category"], "count": row["count"]} for row in result]
+            
+            return {"categories": categories}
+        except Exception as e:
+            logger.error(f"Error retrieving categories: {e}")
+            return {"categories": []}
