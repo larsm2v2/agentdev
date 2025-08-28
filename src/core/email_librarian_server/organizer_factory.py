@@ -6,6 +6,7 @@ import logging
 import sys
 from typing import Dict, Any, Optional, Union, Protocol, cast
 from pathlib import Path
+from src.core.token_bucket import TokenBucket
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +67,7 @@ class OrganizerStub:
 class OrganizerFactory:
     """Factory for creating Gmail organizer instances."""
     
-    def __init__(self, credentials_path: str = 'config/credentials.json', token_path: str = 'data/gmail_token.pickle'):
+    def __init__(self, credentials_path: str = 'config/credentials.json', token_path: str = 'data/gmail_token.pickle', limiter_rate: float = 1.0, limiter_capacity: int = 2):
         """
         Initialize the organizer factory.
         
@@ -76,13 +77,16 @@ class OrganizerFactory:
         """
         self.credentials_path = credentials_path
         self.token_path = token_path
-        
+        # Token bucket configuration for per-organizer rate limiting
+        self.limiter_rate = float(limiter_rate)
+        self.limiter_capacity = int(limiter_capacity)
+
         # Check if organizers are available
         try:
             sys.path.append('.')
             sys.path.append('./src/gmail')
             sys.path.append('./src/core')
-            
+
             # Try to import the organizers
             from src.gmail.fast_gmail_organizer import HighPerformanceGmailOrganizer
             from src.gmail.gmail_organizer import GmailAIOrganizer
@@ -95,7 +99,7 @@ class OrganizerFactory:
             self.high_performance_organizer = None
             self.standard_organizer = None
             self.organizers_available = False
-            
+
         # Try to import container-compatible Gmail categories
         try:
             from container_gmail_categories import (
@@ -134,10 +138,27 @@ class OrganizerFactory:
             
         if organizer_type == "high_performance" and self.high_performance_organizer:
             logger.info("Creating high performance Gmail organizer")
-            return self.high_performance_organizer(credentials_file=self.credentials_path)
+            org = self.high_performance_organizer(
+                credentials_file=self.credentials_path,
+                token_file=self.token_path
+            )
+            # Attach a per-organizer token-bucket limiter (1 token/sec, burst 2)
+            try:
+                org.rate_limiter = TokenBucket(rate=self.limiter_rate, capacity=self.limiter_capacity)
+            except Exception:
+                pass
+            return org
         elif organizer_type == "standard" and self.standard_organizer:
             logger.info("Creating standard Gmail organizer")
-            return self.standard_organizer(credentials_file=self.credentials_path)
+            org = self.standard_organizer(
+                credentials_file=self.credentials_path,
+                token_file=self.token_path
+            )
+            try:
+                org.rate_limiter = TokenBucket(rate=self.limiter_rate, capacity=self.limiter_capacity)
+            except Exception:
+                pass
+            return org
         else:
             logger.warning(f"Unknown organizer type '{organizer_type}', returning stub")
             return OrganizerStub()

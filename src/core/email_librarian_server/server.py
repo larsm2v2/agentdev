@@ -94,12 +94,16 @@ class EnhancedEmailLibrarianServer:
         self.api_router = APIRouter(self)
         app.include_router(self.api_router.router)
         
-        # Add WebSocket endpoint
+        # Add WebSocket endpoints
+        # primary route
         app.websocket("/ws")(self.websocket_endpoint)
-        
+        # compatibility: some older clients still try /ws/librarian
+        # accept those connections and handle them with the same endpoint
+        app.websocket("/ws/librarian")(self.websocket_endpoint)
+
         # Setup frontend routes
         frontend_serving_mode = self.config.get("frontend_serving_mode", "static")
-        
+
         if frontend_serving_mode == "static":
             # Serve static frontend files
             app.mount("/dashboard", StaticFiles(directory="frontend", html=True), name="frontend")
@@ -110,7 +114,7 @@ class EnhancedEmailLibrarianServer:
             else:
                 # Fallback: expose frontend root at /static so older paths still resolve
                 app.mount("/static", StaticFiles(directory="frontend", html=False), name="frontend_static")
-            
+
             # Redirect root to dashboard
             @app.get("/")
             async def redirect_to_dashboard():
@@ -120,25 +124,25 @@ class EnhancedEmailLibrarianServer:
             @app.get("/")
             async def get_frontend():
                 return FileResponse("frontend/index.html")
-                
+
             @app.get("/dashboard")
             async def get_dashboard():
                 return FileResponse("frontend/dashboard/index.html")
-                
+
             @app.get("/dashboard/{path:path}")
             async def get_dashboard_path(path: str):
                 file_path = f"frontend/dashboard/{path}"
                 if Path(file_path).exists():
                     return FileResponse(file_path)
                 return FileResponse("frontend/dashboard/index.html")
-                
+
         try:
             # pass the dashboard metrics collector so /metrics/summary works
             register_metrics(app, metrics_collector=dashboard_metrics_collector)
         except Exception:
             # don't crash server if metrics registration fails
             pass
-        
+
         # Store the app
         self.app = app
         return app
@@ -152,6 +156,25 @@ class EnhancedEmailLibrarianServer:
         
         # Set database in job manager
         self.job_manager.database = self.storage_manager.database
+
+        # Seed persisted function state from in-memory defaults if missing
+        try:
+            if self.api_router and hasattr(self.api_router, "_function_state"):
+                for name, default in self.api_router._function_state.items():
+                    try:
+                        # If there's no persisted state, write the default
+                        existing = None
+                        if hasattr(self.storage_manager, "get_function_state"):
+                            existing = await self.storage_manager.get_function_state(name)
+
+                        if existing is None and hasattr(self.storage_manager, "set_function_state"):
+                            await self.storage_manager.set_function_state(name, bool(default))
+                            logger.info(f"Seeded function_state {name} => {bool(default)}")
+                    except Exception as e:
+                        logger.warning(f"Failed to seed function state for {name}: {e}")
+        except Exception:
+            # Non-fatal if seeding fails
+            logger.exception("Error while seeding function_state defaults")
         
         # Register job processors
         shelving_processor = ShelvingJobProcessor(
@@ -162,7 +185,8 @@ class EnhancedEmailLibrarianServer:
         
         cataloging_processor = CatalogingJobProcessor(
             database=self.storage_manager.database,
-            organizer_factory=self.organizer_factory
+            organizer_factory=self.organizer_factory,
+            storage_manager=self.storage_manager
         )
         self.job_manager.register_processor("cataloging", cataloging_processor)
         

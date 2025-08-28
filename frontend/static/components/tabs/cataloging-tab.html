@@ -70,12 +70,14 @@
         </div>
 
         <button
-          @click="console.log('🔥 BUTTON CLICK EVENT TRIGGERED!', $data); startCataloging()"
-          class="w-full bg-green-600 text-white py-2 px-4 rounded-md hover:bg-green-700 transition-colors"
+          @click="console.log('🔥 BUTTON CLICK EVENT TRIGGERED!', $data); toggleCatalogingAction()"
+          :class="catalogingButtonClass()"
           :disabled="isLoading"
         >
-          <i class="fas fa-play mr-2"></i>
-          <span x-text="isLoading ? 'Starting...' : 'Start Cataloging'"></span>
+          <i
+            :class="functions.cataloging.enabled ? 'fas fa-stop mr-2' : 'fas fa-play mr-2'"
+          ></i>
+          <span x-text="catalogingButtonLabel()"></span>
         </button>
       </div>
     </div>

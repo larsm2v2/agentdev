@@ -59,7 +59,7 @@ class EmailLibrarianController {
   async connectWebSocket() {
     const wsProtocol =
       window.location.protocol === "https:" ? "wss://" : "ws://";
-    const wsUrl = `${wsProtocol}${window.location.host}/ws/librarian`;
+    const wsUrl = `${wsProtocol}${window.location.host}/ws`;
 
     this.websocket = new WebSocket(wsUrl);
 

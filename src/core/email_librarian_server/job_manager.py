@@ -67,11 +67,13 @@ class JobManager:
             logger.warning(f"No processor registered for job type: {job_type}")
 
         # Create job record
+        # Use a datetime object for DB writes, but keep an ISO string for the in-memory record
+        created_at_dt = datetime.now()
         job_record = {
             "id": job_id,
             "job_type": job_type,
             "status": "pending",
-            "created_at": datetime.now().isoformat(),
+            "created_at": created_at_dt.isoformat(),
             "parameters": job_config,
             "progress": 0
         }
@@ -81,15 +83,18 @@ class JobManager:
         
         # Store in database
         query = """
-        INSERT INTO email_processing_jobs (id, job_type, status, created_at, parameters)
-        VALUES (:id, :job_type, :status, :created_at, :parameters)
+        INSERT INTO email_processing_jobs (id, job_type, status, created_at, config, parameters)
+        VALUES (:id, :job_type, :status, :created_at, :config, :parameters)
         """
         values = {
             "id": job_id,
             "job_type": job_type,
             "status": "pending",
-            "created_at": job_record["created_at"],
-            "parameters": job_config
+            # pass a real datetime to the DB driver
+            "created_at": created_at_dt,
+            # store config and parameters as JSON text for compatibility with DB driver
+            "config": json.dumps(job_config),
+            "parameters": json.dumps(job_config)
         }
         if not self.database:
             logger.warning("No database connection - job will only exist in memory")
@@ -121,10 +126,10 @@ class JobManager:
             Job results
         """
         job_type = parameters.get("job_type", "unknown")
-        
+
         # Update job status
         await self.update_job_status(job_id, "processing")
-        
+
         # Get processor for job type
         processor = self.job_processors.get(job_type)
         if not processor:
@@ -134,23 +139,27 @@ class JobManager:
                 "status": "error",
                 "message": f"No processor for job type: {job_type}"
             }
-            
+
         try:
             # Process the job
             logger.info(f"Processing job {job_id} of type {job_type}")
             start_time = time.time()
-            
-            results = await processor.process(job_id, parameters)
-            
+
+            # Many callers pass a job_config dict with keys like {"job_type": ..., "parameters": {...}}
+            # Unwrap that structure when present so processors receive the expected parameters dict.
+            proc_params = parameters.get("parameters", parameters) if isinstance(parameters, dict) else parameters
+
+            results = await processor.process(job_id, proc_params)
+
             # Calculate execution time
             execution_time = time.time() - start_time
-            
+
             # Update job status
             await self.update_job_status(job_id, "completed", results=results)
-            
+
             # Log completion
             logger.info(f"Job {job_id} completed in {execution_time:.2f}s")
-            
+
             return results
         except Exception as e:
             logger.error(f"Error processing job {job_id}: {e}")
@@ -188,10 +197,12 @@ class JobManager:
         SET status = :status, 
             updated_at = :updated_at
         """
+        # Use datetime object for DB; keep ISO string for in-memory record
+        updated_at_dt = datetime.now()
         values = {
             "id": job_id,
             "status": status,
-            "updated_at": datetime.now().isoformat()
+            "updated_at": updated_at_dt
         }
         
         # Add results and error if provided
@@ -205,12 +216,13 @@ class JobManager:
         # Add progress if provided
         if progress is not None:
             query += ", progress = :progress"
-            values["progress"] = str(progress)
+            values["progress"] = progress
             
         # Add WHERE clause
         query += " WHERE id = :id"
         
         if self.database is not None:
+            # Execute DB update with datetime object
             await self.database.execute(query, values)
         else:
             logger.error("Database connection is not available. Cannot update job status.")
@@ -281,6 +293,58 @@ class JobManager:
         """Unregister a WebSocket client."""
         if job_id in self.progress_clients and websocket in self.progress_clients[job_id]:
             self.progress_clients[job_id].remove(websocket)
+
+    async def cancel_job(self, job_id: str) -> bool:
+        """Request cancellation of a running or pending job.
+
+        This marks the job as cancelled (best-effort). Processors should
+        periodically check job status via get_job_status and respect a
+        cancelled state if they want to stop early.
+        """
+        # Update in-memory state
+        job = self.active_jobs.get(job_id)
+        if not job:
+            # If not active in memory, try DB lookup
+            if self.database:
+                row = await self.database.fetch_one("SELECT status FROM email_processing_jobs WHERE id = :job_id", {"job_id": job_id})
+                if not row:
+                    return False
+            else:
+                return False
+
+        # Mark cancelled in-memory
+        if job:
+            job["status"] = "cancelled"
+            job["updated_at"] = datetime.now().isoformat()
+
+        # Persist to DB
+        if self.database:
+            try:
+                await self.database.execute(
+                    """
+                    UPDATE email_processing_jobs
+                    SET status = :status, updated_at = :updated_at
+                    WHERE id = :job_id
+                    """,
+                    {"status": "cancelled", "updated_at": datetime.now(), "job_id": job_id}
+                )
+            except Exception as e:
+                logger.warning(f"Failed to persist job cancellation for {job_id}: {e}")
+
+        # Notify any registered websocket clients about the change
+        if job_id in self.progress_clients:
+            try:
+                status = await self.get_job_status(job_id)
+                for websocket in list(self.progress_clients[job_id]):
+                    try:
+                        await websocket.send_json(status)
+                    except Exception:
+                        self.progress_clients[job_id].discard(websocket)
+            except Exception:
+                logger.exception("Failed to notify progress clients of cancellation")
+
+        logger.info(f"Job {job_id} cancellation requested")
+        return True
         
     async def update_job_progress(self, job_id: str, processed: int, total: int):
         """Update job progress and notify clients."""
@@ -290,6 +354,7 @@ class JobManager:
             job["processed_count"] = processed
             job["total_count"] = total
             job["progress"] = processed / total if total > 0 else 0
+            # keep human-friendly timestamp in memory
             job["updated_at"] = datetime.now().isoformat()
             logger.info(f"📊 Job {job_id}: {processed}/{total} ({job['progress']:.1%})")
             
@@ -310,7 +375,8 @@ class JobManager:
                             "processed": processed,
                             "total": total,
                             "progress": processed / total if total > 0 else 0,
-                            "updated_at": datetime.now().isoformat(),
+                            # pass datetime object
+                            "updated_at": datetime.now(),
                             "job_id": job_id
                         }
                     )
@@ -334,6 +400,37 @@ class JobManager:
             if job.get("job_type") == job_type and job.get("status") in ["pending", "processing"]:
                 return job_id
         return None
+
+    def get_most_recent_job_id(self, job_type: str) -> Optional[str]:
+        """
+        Get the ID of the most recent job of the specified type (including completed jobs).
+        
+        Args:
+            job_type: Type of job to find
+            
+        Returns:
+            Job ID of the most recent job, or None if no jobs of that type exist
+        """
+        most_recent_job = None
+        most_recent_time = None
+        
+        for job_id, job in self.active_jobs.items():
+            if job.get("job_type") == job_type:
+                job_time = job.get("created_at")
+                if job_time:
+                    # Parse the ISO string to compare times
+                    try:
+                        from datetime import datetime
+                        current_time = datetime.fromisoformat(job_time.replace('Z', '+00:00'))
+                        if most_recent_time is None or current_time > most_recent_time:
+                            most_recent_time = current_time
+                            most_recent_job = job_id
+                    except (ValueError, AttributeError):
+                        # If we can't parse the time, use this job as fallback
+                        if most_recent_job is None:
+                            most_recent_job = job_id
+        
+        return most_recent_job
 
 
 

@@ -11,7 +11,7 @@ SCOPES = ['https://www.googleapis.com/auth/gmail.readonly',
           'https://www.googleapis.com/auth/gmail.modify',
           'https://www.googleapis.com/auth/gmail.labels']
 
-def test_gmail_credentials():
+def test_gmail_credentials() -> bool:
     """Test and refresh Gmail credentials"""
     print("🔍 Testing Gmail Authentication...")
     

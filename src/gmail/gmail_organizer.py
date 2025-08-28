@@ -8,6 +8,7 @@ import pickle
 import json
 from typing import Dict, List, Any, Optional, Tuple
 from datetime import datetime, timedelta
+import time
 import base64
 import email
 from email.mime.text import MIMEText
@@ -55,8 +56,8 @@ class GmailAIOrganizer:
         'https://www.googleapis.com/auth/gmail.labels', 
         'https://www.googleapis.com/auth/gmail.modify'
     ]
-    
-    def __init__(self, credentials_file: str = "credentials.json"):
+
+    def __init__(self, credentials_file: str = "credentials.json", token_file: str = "gmail_token.pickle"):
         """
         Initialize Gmail organizer
         
@@ -64,13 +65,16 @@ class GmailAIOrganizer:
             credentials_file: Path to OAuth2 credentials JSON file
         """
         self.credentials_file = credentials_file
-        self.token_file = "gmail_token.pickle"
+        # honor caller-provided token_file path
+        self.token_file = token_file
         self.service = None
         self.creds = None
-        
+        # optional per-organizer rate limiter (TokenBucket) will be attached by factory
+        self.rate_limiter = None
+
         # Initialize AI chains with multi-provider support
         self.ai_manager = MultiLLMManager()
-        
+
         # Email classification categories
         self.categories = {
             "Duke-related work": "DHVI, CFAR, and scientific research emails",
@@ -110,7 +114,7 @@ class GmailAIOrganizer:
             "Glassdoor jobs": "Job-related emails and company insights from Glassdoor",
             "ZipRecruiter jobs": "Job notifications and recruiter messages from ZipRecruiter",
             "Monster jobs": "Job alerts and career communications from Monster",
-            "CareerBuilder jobs": "Job postings and career resources from CareerBuilder",
+            "CareerBuilder jobs": "Job postings from university career centers and academic institutions",
             "AngelList jobs": "Startup job opportunities and notifications from AngelList",
             "Dice jobs": "Technology job alerts and communications from Dice",
             "FlexJobs": "Remote and flexible job opportunities from FlexJobs",
@@ -119,7 +123,7 @@ class GmailAIOrganizer:
             "spam": "Unwanted, suspicious, or junk emails",
             "important": "High priority emails requiring immediate attention"
         }
-        
+
         print("🚀 Gmail AI Organizer initialized")
         print(f"🤖 Using {self.ai_manager.provider_type.value} for AI processing")
     
@@ -131,17 +135,29 @@ class GmailAIOrganizer:
             bool: True if authentication successful
         """
         try:
-            # Load existing token
+            # Load existing token if present
             if os.path.exists(self.token_file):
-                with open(self.token_file, 'rb') as token:
-                    self.creds = pickle.load(token)
-            
-            # If no valid credentials, start OAuth flow
-            if not self.creds or not self.creds.valid:
-                if self.creds and self.creds.expired and self.creds.refresh_token:
-                    print("🔄 Refreshing expired credentials...")
-                    self.creds.refresh(Request())
-                else:
+                try:
+                    with open(self.token_file, 'rb') as token:
+                        self.creds = pickle.load(token)
+                    print(f"📂 Loading existing token from: {self.token_file}")
+                except Exception as e:
+                    print(f"⚠️ Failed to load existing token, will re-auth: {e}")
+                    self.creds = None
+
+            # If no valid credentials, try refresh, otherwise perform interactive auth
+            if not self.creds or not getattr(self.creds, 'valid', False):
+                # Try refresh when possible, but recover on failure
+                if self.creds and getattr(self.creds, 'expired', False) and getattr(self.creds, 'refresh_token', None):
+                    try:
+                        print("🔄 Refreshing expired credentials...")
+                        self.creds.refresh(Request())
+                        print("🔄 Token refreshed successfully")
+                    except Exception as e:
+                        print(f"⚠️ Token refresh failed, will attempt interactive auth: {e}")
+                        self.creds = None
+
+                if not self.creds or not getattr(self.creds, 'valid', False):
                     print("🔐 Starting OAuth2 authentication flow...")
                     if not os.path.exists(self.credentials_file):
                         print(f"❌ Credentials file not found: {self.credentials_file}")
@@ -151,21 +167,34 @@ class GmailAIOrganizer:
                         print("3. Create OAuth2 credentials")
                         print("4. Download as 'credentials.json'")
                         return False
-                    
+
+                    # Remove known-broken token file to force clean flow
+                    try:
+                        if os.path.exists(self.token_file):
+                            os.remove(self.token_file)
+                            print(f"⚠️ Removed broken token file to force re-auth: {self.token_file}")
+                    except Exception:
+                        pass
+
                     flow = InstalledAppFlow.from_client_secrets_file(
                         self.credentials_file, self.SCOPES
                     )
                     self.creds = flow.run_local_server(port=0)
-                
-                # Save credentials for next run
-                with open(self.token_file, 'wb') as token:
-                    pickle.dump(self.creds, token)
-            
+
+                # Persist credentials
+                try:
+                    os.makedirs(os.path.dirname(self.token_file) or '.', exist_ok=True)
+                    with open(self.token_file, 'wb') as token:
+                        pickle.dump(self.creds, token)
+                    print("💾 Saved token to:", self.token_file)
+                except Exception as e:
+                    print(f"⚠️ Failed to save token: {e}")
+
             # Build Gmail service
             self.service = build('gmail', 'v1', credentials=self.creds)
             print("✅ Gmail API authentication successful")
             return True
-            
+
         except Exception as e:
             print(f"❌ Authentication failed: {e}")
             return False
@@ -423,6 +452,142 @@ class GmailAIOrganizer:
         except HttpError as e:
             print(f"❌ Error fetching recent emails: {e}")
             return []
+
+    def batch_get_messages(self, message_ids: List[str]) -> List[Dict[str, Any]]:
+        """
+        Fetch a list of messages in a single batch HTTP request (when supported by the client).
+
+        Args:
+            message_ids: List of Gmail message IDs
+
+        Returns:
+            List of parsed message dicts (same format as get_email_content)
+        """
+        if not self.service:
+            print("❌ Gmail service not authenticated. Please call authenticate() first.")
+            return []
+
+        # Try to import BatchHttpRequest helper; if unavailable, fall back to sequential
+        try:
+            from googleapiclient.http import BatchHttpRequest  # noqa: F401
+        except Exception:
+            # Batch not available - fall back to sequential fetch
+            results = []
+            for mid in message_ids:
+                msg = self.get_email_content(mid)
+                if msg:
+                    results.append(msg)
+            return results
+
+        # We'll accumulate parsed results keyed by message id so we can preserve input order
+        parsed_by_id: Dict[str, Dict[str, Any]] = {}
+        failed_ids: List[str] = []
+
+        def _callback(request_id, response, exception):
+            # request_id is the message id we set when adding the request
+            mid = request_id
+            try:
+                if exception:
+                    # mark as failed; the outer logic may retry
+                    print(f"❌ Error fetching message in batch (id={mid}): {exception}")
+                    failed_ids.append(mid)
+                    return
+
+                # parse response into same format as get_email_content
+                headers = {h['name']: h['value'] for h in response.get('payload', {}).get('headers', [])}
+                body = self._extract_body(response.get('payload', {}))
+                clean_body = self._clean_email_body(body)
+                try:
+                    date_received = date_parser.parse(headers.get('Date', ''))
+                except Exception:
+                    date_received = None
+
+                parsed = {
+                    'id': response.get('id') or mid,
+                    'thread_id': response.get('threadId'),
+                    'subject': headers.get('Subject', ''),
+                    'sender': headers.get('From', ''),
+                    'recipient': headers.get('To', ''),
+                    'date': date_received,
+                    'body': clean_body,
+                    'raw_body': body,
+                    'labels': response.get('labelIds', []),
+                    'snippet': response.get('snippet', ''),
+                    'headers': headers
+                }
+                parsed_by_id[mid] = parsed
+            except Exception as e:
+                print(f"❌ Failed to parse batched message {mid}: {e}")
+                failed_ids.append(mid)
+
+        # Batch execution with simple retry/backoff for transient failures
+        results: List[Dict[str, Any]] = []
+        to_fetch = list(message_ids)
+        max_attempts = 3
+        attempt = 0
+
+        while to_fetch and attempt < max_attempts:
+            attempt += 1
+            failed_ids = []
+            batch = self.service.new_batch_http_request(callback=_callback)
+
+            for mid in to_fetch:
+                try:
+                    req = self.service.users().messages().get(userId='me', id=mid, format='full')
+                    # associate the request id so callback knows which message this is
+                    batch.add(req, request_id=mid)
+                except Exception as e:
+                    print(f"❌ Failed to add message {mid} to batch: {e}")
+                    failed_ids.append(mid)
+
+            try:
+                batch.execute()
+            except HttpError as e:
+                # If the entire batch failed, mark all as failed this round and retry
+                print(f"❌ Batch execution failed on attempt {attempt}: {e}")
+                # best-effort: if exception contains retry info, respect it
+                try:
+                    headers = getattr(e, 'resp', None) and getattr(e.resp, 'headers', None)
+                    retry_after = None
+                    if headers:
+                        retry_after = headers.get('retry-after') or headers.get('Retry-After')
+                    if retry_after:
+                        wait = int(retry_after)
+                    else:
+                        wait = 2 ** attempt
+                except Exception:
+                    wait = 2 ** attempt
+
+                time.sleep(wait)
+                # schedule all for retry
+                to_fetch = list(set(to_fetch))
+                continue
+            except Exception as e:
+                # Non-HttpError - log and backoff a bit before retrying
+                print(f"❌ Unexpected batch execution error on attempt {attempt}: {e}")
+                wait = 2 ** attempt
+                time.sleep(wait)
+                to_fetch = list(set(to_fetch))
+                continue
+
+            # Prepare next round: any ids recorded as failed will be retried
+            to_fetch = failed_ids
+
+            if to_fetch:
+                # exponential backoff before retrying
+                wait = 2 ** attempt
+                print(f"⏳ Retrying {len(to_fetch)} failed messages after {wait}s (attempt {attempt}/{max_attempts})")
+                time.sleep(wait)
+
+        # Build results preserving original order
+        for mid in message_ids:
+            if mid in parsed_by_id:
+                results.append(parsed_by_id[mid])
+            else:
+                # skip missing messages (failed after retries)
+                print(f"⚠️ Message {mid} failed to fetch after {max_attempts} attempts")
+
+        return results
     
     def reprocess_existing_emails(self, batch_size: int = 50, log_file: str = "processed_emails_log.json", delete_old_labels: bool = True) -> Dict[str, Any]:
         """

@@ -67,7 +67,7 @@ python -m http.server 8080
 ### 2. **Development**
 
 - The frontend expects API endpoints at `/api/*`
-- WebSocket connection at `/ws/librarian`
+- WebSocket connection at `/ws`
 - All configurations are automatically saved to localStorage
 
 ### 3. **Integration**

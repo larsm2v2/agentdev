@@ -34,7 +34,7 @@ class EmailLibrarianController {
         endpoint: "/workflows",
         status: "inactive",
         activeWorkflows: [],
-        executionHistory: []
+        executionHistory: [],
       },
     };
     this.eventListeners = {};
@@ -59,7 +59,7 @@ class EmailLibrarianController {
   async connectWebSocket() {
     const wsProtocol =
       window.location.protocol === "https:" ? "wss://" : "ws://";
-    const wsUrl = `${wsProtocol}${window.location.host}/ws/librarian`;
+    const wsUrl = `${wsProtocol}${window.location.host}/ws`;
 
     this.websocket = new WebSocket(wsUrl);
 
@@ -745,7 +745,7 @@ function enhancedEmailLibrarianApp() {
         this.showNotification("Failed to export data", "error");
       }
     },
-    
+
     toggleWorkflow(workflowId) {
       console.log(`Toggling workflow ${workflowId}`);
       const workflow = this.functions.workflows.activeWorkflows.find(

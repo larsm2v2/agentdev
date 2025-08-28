@@ -46,6 +46,32 @@
               },
               recentActivity: [],
             },
+            cataloging: {
+              enabled: false,
+              historicalCount: 0,
+              processingRate: 0,
+              progress: 0,
+              processed: 0,
+              remaining: 0,
+              apiCalls: 0,
+              apiCallsPerMinute: 0,
+              quotaUsed: 0,
+              estimatedTime: "",
+              categoriesFound: [],
+              config: {
+                startDate: "",
+                endDate: "",
+                batchSize: 50,
+              },
+            },
+            reclassification: {
+              enabled: false,
+              labelsCount: 0,
+              reclassifiedCount: 0,
+              config: {
+                batchSize: 50,
+              },
+            },
             workflows: {
               name: "Workflows",
               endpoint: "/workflows",
@@ -187,7 +213,12 @@
 
       // Function to load scripts after DOM is ready
       function loadScripts() {
-        const scripts = [`/static/js/components-loader.js`];
+        // Load main controller first, then admin dashboard, then component loader
+        const scripts = [
+          `/static/js/email_librarian.js`,
+          `/static/js/admin-dashboard.js`,
+          `/static/js/components-loader.js`,
+        ];
 
         // Load scripts sequentially to ensure proper order
         let scriptIndex = 0;

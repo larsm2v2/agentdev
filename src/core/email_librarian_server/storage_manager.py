@@ -299,7 +299,45 @@ class StorageManager:
                     ON emails(category);
                 """)
 
+                # Ensure legacy databases get any missing columns added to email_processing_jobs
+                # This is important for deployments that have an older schema without 'parameters' etc.
+                try:
+                    await connection.execute("""
+                        ALTER TABLE email_processing_jobs
+                        ADD COLUMN IF NOT EXISTS parameters JSONB,
+                        ADD COLUMN IF NOT EXISTS results JSONB,
+                        ADD COLUMN IF NOT EXISTS processed_count INTEGER DEFAULT 0,
+                        ADD COLUMN IF NOT EXISTS total_count INTEGER DEFAULT 0,
+                        ADD COLUMN IF NOT EXISTS progress DECIMAL(5,4) DEFAULT 0.0,
+                        ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        ADD COLUMN IF NOT EXISTS error_message TEXT
+                    ;
+                    """)
+                except Exception:
+                    # Some Postgres versions or SQL drivers may not support multi-add in one ALTER; try individually
+                    try:
+                        await connection.execute("""ALTER TABLE email_processing_jobs ADD COLUMN IF NOT EXISTS parameters JSONB;""")
+                        await connection.execute("""ALTER TABLE email_processing_jobs ADD COLUMN IF NOT EXISTS results JSONB;""")
+                        await connection.execute("""ALTER TABLE email_processing_jobs ADD COLUMN IF NOT EXISTS processed_count INTEGER DEFAULT 0;""")
+                        await connection.execute("""ALTER TABLE email_processing_jobs ADD COLUMN IF NOT EXISTS total_count INTEGER DEFAULT 0;""")
+                        await connection.execute("""ALTER TABLE email_processing_jobs ADD COLUMN IF NOT EXISTS progress DECIMAL(5,4) DEFAULT 0.0;""")
+                        await connection.execute("""ALTER TABLE email_processing_jobs ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;""")
+                        await connection.execute("""ALTER TABLE email_processing_jobs ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;""")
+                        await connection.execute("""ALTER TABLE email_processing_jobs ADD COLUMN IF NOT EXISTS error_message TEXT;""")
+                    except Exception as e:
+                        logger.warning(f"Could not ensure legacy columns on email_processing_jobs: {e}")
+
                 # activity_log table intentionally removed per configuration
+
+                # Function state table to persist on/off toggles for features
+                await connection.execute("""
+                    CREATE TABLE IF NOT EXISTS function_state (
+                        name TEXT PRIMARY KEY,
+                        enabled BOOLEAN NOT NULL DEFAULT FALSE,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );
+                """)
                 
                 logger.info("✅ Database schema initialized successfully")
                 return True
@@ -361,6 +399,41 @@ class StorageManager:
         except Exception as e:
             logger.error(f"Error retrieving job {job_id}: {e}")
             return None
+
+    async def get_function_state(self, name: str) -> Optional[bool]:
+        """Retrieve persisted function enabled state from the database."""
+        try:
+            if not self.database:
+                logger.debug("Database not available for get_function_state")
+                return None
+
+            row = await self.database.fetch_one("""
+                SELECT enabled FROM function_state WHERE name = :name
+            """, {"name": name})
+
+            if row is None:
+                return None
+            return bool(row["enabled"])
+        except Exception as e:
+            logger.error(f"Error getting function state for {name}: {e}")
+            return None
+
+    async def set_function_state(self, name: str, enabled: bool) -> bool:
+        """Persist function enabled state into the database."""
+        try:
+            if not self.database:
+                logger.debug("Database not available for set_function_state")
+                return False
+
+            await self.database.execute("""
+                INSERT INTO function_state (name, enabled, updated_at)
+                VALUES (:name, :enabled, CURRENT_TIMESTAMP)
+                ON CONFLICT (name) DO UPDATE SET enabled = EXCLUDED.enabled, updated_at = CURRENT_TIMESTAMP
+            """, {"name": name, "enabled": enabled})
+            return True
+        except Exception as e:
+            logger.error(f"Error setting function state for {name}: {e}")
+            return False
         
     async def health_check(self) -> Dict[str, bool]:
         """

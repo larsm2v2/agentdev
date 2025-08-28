@@ -79,6 +79,18 @@ class APIRouter:
         self.router.post("/functions/cataloging/start")(self.start_cataloging)
         self.router.get("/functions/cataloging/progress")(self.get_cataloging_progress)
         self.router.get("/functions/cataloging/categories")(self.get_categories)
+        # Generic function toggle endpoints (shelving, cataloging, reclassification, workflows)
+        # frontend expects POST /api/<function>/toggle
+        self.router.post("/{function_name}/toggle")(self.toggle_function)
+
+        # Expose function status
+        self.router.get("/{function_name}/status")(self.get_function_status)
+
+        # Admin: list all function states
+        self.router.get("/functions")(self.list_functions)
+
+        # Job cancellation
+        self.router.post("/jobs/{job_id}/cancel")(self.cancel_job)
 
         
     async def create_job(self, job_config: JobConfig, background_tasks: BackgroundTasks):
@@ -243,11 +255,11 @@ class APIRouter:
     
     async def get_shelving_progress(self):
         #Get current progress of active shelving job.
-        active_job_id = self.server.job_manager.get_active_job_id("shelving")
-        if not active_job_id:
+        recent_job_id = self.server.job_manager.get_most_recent_job_id("shelving")
+        if not recent_job_id:
             return {"status": "no_active_job", "progress": 0}
             
-        job_status = await self.server.job_manager.get_job_status(active_job_id)
+        job_status = await self.server.job_manager.get_job_status(recent_job_id)
         
         # Extract progress information
         processed = job_status.get("processed_count", 0)
@@ -259,7 +271,7 @@ class APIRouter:
             "progress": progress,
             "processed_count": processed,
             "total_count": total,
-            "job_id": active_job_id
+            "job_id": recent_job_id
         }
         
     async def start_cataloging(self, background_tasks: BackgroundTasks, parameters: Dict[str, Any] = Body(...)):
@@ -296,11 +308,12 @@ class APIRouter:
     async def get_cataloging_progress(self):
         """Get current progress of active cataloging job."""
         try:
-            active_job_id = self.server.job_manager.get_active_job_id("cataloging")
-            if not active_job_id:
+            # Get the most recent cataloging job (including completed ones)
+            recent_job_id = self.server.job_manager.get_most_recent_job_id("cataloging")
+            if not recent_job_id:
                 return {"status": "no_active_job", "progress": 0}
             
-            job_status = await self.server.job_manager.get_job_status(active_job_id)
+            job_status = await self.server.job_manager.get_job_status(recent_job_id)
             
             # Extract progress information
             processed = job_status.get("processed_count", 0)
@@ -312,11 +325,24 @@ class APIRouter:
                 "progress": progress,
                 "processed_count": processed,
                 "total_count": total,
-                "job_id": active_job_id,
+                "job_id": recent_job_id,
                 "results": job_status.get("results", {})
             }
         except Exception as e:
             logger.error(f"Error getting cataloging progress: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
+
+    async def cancel_job(self, job_id: str):
+        """Cancel a job by id (best-effort)."""
+        try:
+            ok = await self.server.job_manager.cancel_job(job_id)
+            if not ok:
+                raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+            return {"status": "success", "message": f"Cancellation requested for {job_id}"}
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.exception(f"Error cancelling job {job_id}: {e}")
             raise HTTPException(status_code=500, detail=str(e))
 
     async def get_categories(self):
@@ -339,3 +365,75 @@ class APIRouter:
         except Exception as e:
             logger.error(f"Error retrieving categories: {e}")
             return {"categories": []}
+
+    # In-memory function state (fallback)
+    _function_state: Dict[str, bool] = {
+        "shelving": False,
+        "cataloging": False,
+        "reclassification": False,
+        "workflows": True,
+    }
+
+    async def toggle_function(self, function_name: str, body: Dict[str, Any] = Body(...)):
+        """Toggle a named function on/off. Returns the new enabled state."""
+        enabled = bool(body.get("enabled", True))
+
+        # Try to persist to DB first
+        try:
+            storage_mgr = self.server.storage_manager
+            if storage_mgr and hasattr(storage_mgr, "set_function_state"):
+                ok = await storage_mgr.set_function_state(function_name, enabled)
+                if ok:
+                    logger.info(f"Persisted function state for {function_name} => {enabled}")
+                else:
+                    logger.warning(f"Failed to persist function state for {function_name}; falling back to memory")
+        except Exception as e:
+            logger.exception(f"Error persisting function state for {function_name}: {e}")
+            ok = False
+
+        # Update in-memory fallback state
+        self._function_state[function_name] = enabled
+
+        # Broadcast status change via server websocket
+        try:
+            await self.server.add_activity("function_toggle", f"{function_name} toggled", {"function": function_name, "enabled": enabled})
+        except Exception:
+            logger.exception("Failed to broadcast function toggle")
+
+        return {"function": function_name, "enabled": enabled}
+
+    async def get_function_status(self, function_name: str):
+        """Return the current status for a named function."""
+        # Try DB-backed state first
+        try:
+            storage_mgr = self.server.storage_manager
+            if storage_mgr and hasattr(storage_mgr, "get_function_state"):
+                state = await storage_mgr.get_function_state(function_name)
+                if state is not None:
+                    return {"function": function_name, "enabled": state}
+        except Exception as e:
+            logger.exception(f"Error reading persisted function state for {function_name}: {e}")
+
+        # Fall back to in-memory state
+        enabled = self._function_state.get(function_name, False)
+        return {"function": function_name, "enabled": enabled}
+
+    async def list_functions(self):
+        """Return a list of known functions and their current states (DB-backed or fallback)."""
+        functions = {}
+        try:
+            storage_mgr = self.server.storage_manager
+            if storage_mgr and hasattr(storage_mgr, "database") and storage_mgr.database:
+                # Fetch all persisted function states
+                rows = await storage_mgr.database.fetch_all("SELECT name, enabled FROM function_state")
+                for r in rows:
+                    functions[r["name"]] = bool(r["enabled"])
+        except Exception:
+            logger.exception("Error reading persisted function states")
+
+        # Ensure fallback values are present
+        for name, val in self._function_state.items():
+            if name not in functions:
+                functions[name] = val
+
+        return {"functions": functions}

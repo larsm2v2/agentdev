@@ -41,7 +41,7 @@ enhanced_email_librarian_server.py
     GET /api/functions/performance
     POST /api/functions/cataloging/start (duplicate/alternate registration exists — same path)
     POST /api/functions/reclassification/start
-    WEBSOCKET /ws/librarian
+    WEBSOCKET /ws
     GET /auth/gmail/start
     GET /auth/gmail/callback
     GET /auth/gmail/status
