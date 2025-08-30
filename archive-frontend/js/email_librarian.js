@@ -246,7 +246,7 @@ class EmailLibrarianController {
   // Reclassification Methods
   async getAvailableLabels() {
     try {
-      const response = await fetch(`${this.apiBase}/reclassification/labels`);
+      const response = await fetch(`${this.apiBase}/labels`);
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       return await response.json();
     } catch (error) {

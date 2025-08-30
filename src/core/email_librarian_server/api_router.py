@@ -55,30 +55,36 @@ class APIRouter:
         self.router.post("/jobs/create", response_model=EmailProcessingResult)(self.create_job)
         self.router.get("/jobs/{job_id}", response_model=EmailProcessingResult)(self.get_job_status)
         self.router.get("/jobs", response_model=List[EmailProcessingResult])(self.list_jobs)
-        
+
         # Gmail authentication routes
         self.router.get("/auth/status")(self.get_auth_status)
         self.router.get("/auth/login")(self.login)
         self.router.get("/auth/logout")(self.logout)
-        
+
         # Email search routes
         self.router.post("/search/vector")(self.search_similar_emails)
         self.router.get("/search/query")(self.search_emails)
-        
+
         # System routes
         self.router.get("/system/status")(self.get_system_status)
         self.router.get("/system/activity")(self.get_activity_log)
-        
+
         # Web Socket
         self.router.websocket("/ws/jobs/{job_id}")(self.job_progress_websocket)
-        
+
         # Polling Progress
         self.router.get("/functions/shelving/progress")(self.get_shelving_progress)
-        
+
         # Cataloging endpoints
         self.router.post("/functions/cataloging/start")(self.start_cataloging)
         self.router.get("/functions/cataloging/progress")(self.get_cataloging_progress)
         self.router.get("/functions/cataloging/categories")(self.get_categories)
+
+        # Reclassification labels endpoint (frontend expects GET /api/labels)
+        self.router.get("/labels")(self.get_labels)
+        # Management: force-refresh labels from Gmail organizer and persist
+        self.router.post("/labels/refresh")(self.refresh_labels)
+
         # Generic function toggle endpoints (shelving, cataloging, reclassification, workflows)
         # frontend expects POST /api/<function>/toggle
         self.router.post("/{function_name}/toggle")(self.toggle_function)
@@ -91,8 +97,13 @@ class APIRouter:
 
         # Job cancellation
         self.router.post("/jobs/{job_id}/cancel")(self.cancel_job)
-
         
+    # Expose test endpoints
+        self.router.get("/test/get_message_ids_range")(self.get_message_ids_range)
+        self.router.post("/test/batch_message_ids")(self.batch_message_ids)
+        self.router.post("/test/retrieve_sample_batch_emails")(self.retrieve_sample_batch_emails)
+        self.router.post("/test/retrieve_sample_batch_emails_raw")(self.retrieve_sample_batch_emails_raw)
+
     async def create_job(self, job_config: JobConfig, background_tasks: BackgroundTasks):
         """
         Create a new email processing job.
@@ -437,3 +448,675 @@ class APIRouter:
                 functions[name] = val
 
         return {"functions": functions}
+
+    async def get_labels(self):
+        """Return a list of labels usable for reclassification.
+
+        Attempts to read from storage manager first, then falls back to using a
+        Gmail organizer (if available). Returns an empty list on any failure so
+        the frontend can continue operating.
+        """
+        try:
+            # Try storage-backed label list first
+            storage_mgr = self.server.storage_manager
+            logger.debug(f"get_labels: storage_mgr present={storage_mgr is not None}")
+            if storage_mgr and hasattr(storage_mgr, "get_labels"):
+                try:
+                    labels = await storage_mgr.get_labels()
+                    logger.debug(f"get_labels: storage_mgr.get_labels returned type={type(labels)}")
+                    if isinstance(labels, list) and labels:
+                        logger.info(f"get_labels: returning {len(labels)} labels from storage")
+                        return labels
+                    else:
+                        logger.info("get_labels: storage returned no labels or non-list")
+                except Exception as e:
+                    logger.exception(f"get_labels: storage.get_labels threw: {e}")
+
+            # Fallback: try Gmail organizer to enumerate user labels
+            if self.server.organizer_factory and self.server.organizer_factory.organizers_available:
+                organizer = self.server.organizer_factory.create_organizer()
+                logger.debug(f"get_labels: organizer created type={type(organizer)}")
+                try:
+                    # Assume organizer exposes a method to list labels
+                    gmail_labels = organizer.list_labels() if hasattr(organizer, "list_labels") else None
+                    logger.debug(f"get_labels: organizer.list_labels returned type={type(gmail_labels)}")
+                    if isinstance(gmail_labels, list) and gmail_labels:
+                        logger.info(f"get_labels: returning {len(gmail_labels)} labels from organizer")
+                        # Normalize to simple list of names or dicts as expected by frontend
+                        return gmail_labels
+                    else:
+                        logger.info("get_labels: organizer returned no labels or non-list")
+                except Exception as e:
+                    logger.exception(f"Failed to retrieve labels from Gmail organizer: {e}")
+
+        except Exception as e:
+            logger.exception(f"Error while fetching reclassification labels: {e}")
+
+        # Last resort: return empty list to avoid 404 for frontend
+        logger.info("get_labels: returning empty list as last resort")
+        return []
+
+    async def refresh_labels(self):
+        """Force-refresh labels from the Gmail organizer, update Redis cache and Postgres table.
+
+        Returns the list of labels that were discovered and persisted.
+        """
+        try:
+            # Create organizer
+            if not (self.server.organizer_factory and self.server.organizer_factory.organizers_available):
+                raise HTTPException(status_code=503, detail="Gmail organizers not available")
+
+            organizer = self.server.organizer_factory.create_organizer()
+
+            # Call list_labels (support sync or async implementations)
+            if hasattr(organizer, "list_labels"):
+                labels_raw = organizer.list_labels()
+                if asyncio.iscoroutine(labels_raw):
+                    labels = await labels_raw
+                else:
+                    labels = labels_raw
+            else:
+                raise HTTPException(status_code=501, detail="Organizer does not implement list_labels")
+
+            # Normalize into id->name mapping for Redis cache and list of dicts for DB
+            cache_map = {}
+            db_rows = []
+            for item in labels or []:
+                if isinstance(item, dict):
+                    lid = item.get("id") or item.get("label_id") or item.get("name")
+                    name = item.get("name") or item.get("label") or str(lid)
+                    typ = item.get("type") or "user"
+                else:
+                    lid = str(item)
+                    name = str(item)
+                    typ = "user"
+
+                cache_map[name] = lid
+                db_rows.append({"label_id": lid, "name": name, "type": typ})
+
+            # Update Redis cache if redis_cache_manager available (or storage manager wrapper)
+            try:
+                redis_mgr = getattr(self.server.storage_manager, 'redis_cache_manager', None)
+                if not redis_mgr:
+                    redis_mgr = getattr(self.server, 'redis_cache_manager', None)
+
+                if redis_mgr and hasattr(redis_mgr, 'update_label_cache'):
+                    await redis_mgr.update_label_cache(cache_map)
+                    logger.info(f"Refreshed Redis label cache with {len(cache_map)} entries")
+            except Exception as e:
+                logger.warning(f"Failed to update Redis label cache: {e}")
+
+            # Upsert into Postgres gmail_labels table if database available
+            try:
+                db = self.server.storage_manager.database
+                if db:
+                    # Use a simple upsert - assumes table gmail_labels(label_id TEXT PRIMARY KEY, name TEXT, type TEXT)
+                    for r in db_rows:
+                        await db.execute("""
+                            INSERT INTO gmail_labels (label_id, name, type) VALUES (:label_id, :name, :type)
+                            ON CONFLICT (label_id) DO UPDATE SET name = EXCLUDED.name, type = EXCLUDED.type
+                        """, r)
+                    logger.info(f"Persisted {len(db_rows)} labels to Postgres gmail_labels table")
+            except Exception as e:
+                logger.warning(f"Failed to persist labels to Postgres: {e}")
+
+            return labels or []
+
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.exception(f"Failed to refresh reclassification labels: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
+
+    async def get_message_ids_range(self, start: str, end: str, chunk_size: int):
+        """
+        Return message ids for emails in the given (epoch seconds) range.
+
+        Args:
+            start: start time as POSIX seconds (inclusive)
+            end: end time as POSIX seconds (exclusive)
+
+        Returns:
+            Dict with count and list of message ids.
+        """
+        try:
+            # Accept either POSIX ints or date strings like YYYY/MM/DD; convert to epoch seconds
+            if start is None or end is None:
+                raise HTTPException(status_code=400, detail="start and end parameters are required")
+
+            def to_posix(v):
+                """Convert an input value to POSIX seconds.
+
+                Accepts:
+                - int or float
+                - numeric strings (e.g. "1690000000" or "1690000000.5")
+                - date strings in common formats (YYYY/MM/DD, YYYY-MM-DD, DD/MM/YYYY, MM/DD/YYYY)
+                - ISO-8601 strings
+                """
+                from datetime import datetime, timezone
+
+                # numeric types
+                if isinstance(v, (int, float)):
+                    return int(v)
+
+                # strings (could be numeric epoch or date formats)
+                if isinstance(v, str):
+                    s = v.strip()
+
+                    # Try numeric epoch string first (int or float)
+                    try:
+                        # allow floats like '1690000000.123'
+                        if "." in s:
+                            return int(float(s))
+                        return int(s)
+                    except Exception:
+                        pass
+
+                    # Try common date formats
+                    for fmt in ("%Y/%m/%d", "%Y-%m-%d", "%Y/%m/%d %H:%M:%S", "%Y-%m-%d %H:%M:%S", "%Y/%m/%d %H:%M", "%d/%m/%Y", "%m/%d/%Y"):
+                        try:
+                            dt = datetime.strptime(s, fmt)
+                            return int(dt.replace(tzinfo=timezone.utc).timestamp())
+                        except Exception:
+                            continue
+
+                    # Try ISO parsing
+                    try:
+                        dt = datetime.fromisoformat(s)
+                        if dt.tzinfo is None:
+                            dt = dt.replace(tzinfo=timezone.utc)
+                        return int(dt.timestamp())
+                    except Exception:
+                        raise HTTPException(status_code=400, detail=f"Invalid date format: {s}. Use YYYY/MM/DD, ISO, or epoch seconds")
+
+                # Anything else is invalid
+                raise HTTPException(status_code=400, detail="start and end must be integers, numeric strings, or date strings")
+
+            start_ts = to_posix(start)
+            end_ts = to_posix(end)
+            if start_ts >= end_ts:
+                raise HTTPException(status_code=400, detail="start must be less than end")
+
+            # Build a Gmail query using epoch seconds; Gmail accepts after: and before: with epoch
+            query = f"after:{start_ts} before:{end_ts}"
+
+            # Create organizer and try a direct service-backed paged listing first
+            organizer = self.server.organizer_factory.create_organizer()
+            # Prefer direct service-backed, paged listing (uses labelIds to exclude archived)
+            try:
+                # local import of the helper in same package
+                from .job_processors import list_message_ids_in_range
+
+                if hasattr(organizer, "service") and getattr(organizer, "service", None):
+                    try:
+                        ids = await list_message_ids_in_range(
+                            organizer.service,
+                            query,
+                            max_ids=10000,
+                            page_size=500,
+                            label_ids=["INBOX"],
+                        )
+                        return {"count": len(ids), "message_ids": ids, "chunk_size": chunk_size}
+                    except Exception as e:
+                        logger.warning(f"Service-backed list_message_ids_in_range failed: {e}")
+            except Exception:
+                # Import failed or helper not available; fall back to organizer methods
+                pass
+
+            # Fallback: try organizer.search_messages or organizer.list_message_ids_in_range if present
+            search_call = None
+            if hasattr(organizer, "search_messages"):
+                search_call = organizer.search_messages(query=query, max_results=10000)
+            else:
+                # Fallback: try a generic messages list function if present on organizer
+                if hasattr(organizer, "list_message_ids_in_range"):
+                    search_call = organizer.list_message_ids_in_range(start, end)
+
+            if search_call is None:
+                raise HTTPException(status_code=501, detail="Organizer does not implement a search API")
+
+            if asyncio.iscoroutine(search_call):
+                results = await search_call
+            else:
+                results = search_call
+
+            # Normalize to a flat list of message ids
+            ids: List[str] = []
+            if results is None:
+                ids = []
+            elif isinstance(results, list):
+                for item in results:
+                    if isinstance(item, str):
+                        ids.append(item)
+                    elif isinstance(item, dict):
+                        # common keys
+                        mid = item.get("id") or item.get("message_id") or item.get("messageId")
+                        if mid:
+                            ids.append(str(mid))
+                    else:
+                        # try to stringify anything else
+                        try:
+                            ids.append(str(item))
+                        except Exception:
+                            continue
+            else:
+                # single object -> try to extract id
+                if isinstance(results, dict):
+                    mid = results.get("id") or results.get("message_id") or results.get("messageId")
+                    ids = [str(mid)] if mid else []
+                else:
+                    ids = [str(results)]
+
+            return {"count": len(ids), "message_ids": ids, "chunk_size": chunk_size}
+
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.exception(f"Error in get_message_ids_range: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
+
+    async def batch_message_ids(self, payload: Dict[str, Any] = Body(...)):
+
+        """
+        Split a flat list of message ids into batches.
+
+        Expects a JSON object body with keys:
+        - message_ids: list of ids
+        - chunk_size: optional int (default 100)
+
+        Returns a dict with total count and list of batches.
+        """
+        try:
+            if not isinstance(payload, dict):
+                raise HTTPException(status_code=400, detail="request body must be a JSON object")
+
+            message_ids = payload.get("message_ids")
+            chunk_size = payload.get("chunk_size", 10)
+
+            if not isinstance(message_ids, list):
+                raise HTTPException(status_code=400, detail="message_ids must be a list")
+            try:
+                chunk_size = int(chunk_size)
+            except Exception:
+                raise HTTPException(status_code=400, detail="chunk_size must be an integer")
+            if chunk_size <= 0:
+                raise HTTPException(status_code=400, detail="chunk_size must be a positive integer")
+
+            # normalize to strings and remove falsy values
+            ids = [str(x) for x in message_ids if x]
+            batches = [ids[i : i + chunk_size] for i in range(0, len(ids), chunk_size)]
+
+            return {"count": len(ids), "batches": batches, "chunk_size": chunk_size}
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.exception(f"Error in batch_message_ids: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
+
+    async def retrieve_sample_batch_emails(self, payload: Dict[str, Any] = Body(...)):
+        try:
+            # Normalize incoming payload (accept JSON object or stringified JSON)
+            if not isinstance(payload, dict):
+                if isinstance(payload, str):
+                    import json, ast
+                    try:
+                        payload = json.loads(payload)
+                    except Exception:
+                        try:
+                            payload = ast.literal_eval(payload)
+                        except Exception:
+                            raise HTTPException(status_code=400, detail="request body must be a JSON object")
+                else:
+                    raise HTTPException(status_code=400, detail="request body must be a JSON object")
+
+            # Support wrapper with 'input'
+            raw_input = payload.get("input")
+            if isinstance(raw_input, str):
+                import json, ast
+                try:
+                    payload = json.loads(raw_input)
+                except Exception:
+                    try:
+                        payload = ast.literal_eval(raw_input)
+                    except Exception:
+                        raise HTTPException(status_code=400, detail="input field must contain valid JSON")
+
+            # Extract batches / chunk_size / count
+            batches_raw = payload.get("batches") or payload.get("batched_message_ids") or payload.get("message_ids")
+            chunk_size = payload.get("chunk_size")
+            count = payload.get("count")
+
+            if batches_raw is None:
+                raise HTTPException(status_code=400, detail="payload must include 'batches' or 'batched_message_ids'")
+
+            # Allow stringified batches
+            import json, ast
+            if isinstance(batches_raw, str):
+                try:
+                    batches_raw = json.loads(batches_raw)
+                except Exception:
+                    try:
+                        batches_raw = ast.literal_eval(batches_raw)
+                    except Exception:
+                        raise HTTPException(status_code=400, detail="batches must be a list or a stringified list")
+
+            # Normalize to list[list[str]]
+            if isinstance(batches_raw, list) and batches_raw and not any(isinstance(i, list) for i in batches_raw):
+                batches = [[str(i) for i in batches_raw if i]]
+            else:
+                if not isinstance(batches_raw, list):
+                    raise HTTPException(status_code=400, detail="batches must be a list of lists")
+                batches = []
+                for b in batches_raw:
+                    if not isinstance(b, list):
+                        raise HTTPException(status_code=400, detail="each batch must be a list of message ids")
+                    clean = [str(x) for x in b if x]
+                    if clean:
+                        batches.append(clean)
+
+            try:
+                chunk_size = None if chunk_size is None else int(chunk_size)
+            except Exception:
+                raise HTTPException(status_code=400, detail="chunk_size must be an integer if provided")
+
+            organizer = self.server.organizer_factory.create_organizer()
+
+            if not hasattr(organizer, "fetch_email"):
+                # return batches of ids when fetch not available
+                return {"requested": count or sum(len(b) for b in batches), "returned": sum(len(b) for b in batches), "batches": batches}
+
+            # bounded concurrency across a batch
+            MAX_BODY = 400
+
+            async def _fetch_and_sanitize(mid: str):
+                try:
+                    out = organizer.fetch_email(mid)
+                    res = await out if asyncio.iscoroutine(out) else await asyncio.to_thread(out)
+                    body = ""
+                    sender = ""
+                    subject = ""
+
+                    if isinstance(res, dict):
+                        data = res.get("data") or res
+                        sender = data.get("sender") or data.get("from") or data.get("from_address") or data.get("return_path") or ""
+                        subject = data.get("subject") or data.get("title") or ""
+                        raw_b = data.get("raw_body") or data.get("raw") or data.get("body") or ""
+                        if isinstance(raw_b, (bytes, bytearray)):
+                            try:
+                                body = raw_b.decode("utf-8", errors="replace")
+                            except Exception:
+                                body = str(raw_b)
+                        else:
+                            body = str(raw_b or "")
+                    else:
+                        try:
+                            sender = getattr(res, "sender", "") or getattr(res, "from", "") or ""
+                        except Exception:
+                            sender = ""
+                        try:
+                            subject = getattr(res, "subject", "") or ""
+                        except Exception:
+                            subject = ""
+                        try:
+                            raw_b = getattr(res, "raw_body", None) or getattr(res, "raw", None) or getattr(res, "body", None)
+                            if isinstance(raw_b, (bytes, bytearray)):
+                                body = raw_b.decode("utf-8", errors="replace")
+                            else:
+                                body = str(raw_b or "")
+                        except Exception:
+                            body = ""
+
+                    sender = str(sender) if sender is not None else ""
+                    subject = str(subject) if subject is not None else ""
+                    body = (body or "")[:MAX_BODY]
+
+                    return {"sender": sender, "subject": subject, "body": body, "message_id": mid}
+                except Exception as e:
+                    logger.debug(f"failed to fetch {mid}: {e}")
+                    return None
+
+            output_batches = []
+            total_requested = 0
+            total_returned = 0
+
+            for batch in batches:
+                ids = [str(mid) for mid in batch if mid]
+                if not ids:
+                    output_batches.append([])
+                    continue
+
+                to_fetch = ids if not chunk_size or chunk_size <= 0 else ids[:int(chunk_size)]
+                total_requested += len(to_fetch)
+
+                sem = asyncio.Semaphore(min(10, max(1, len(to_fetch))))
+                # create fetch tasks bound to semaphore
+                async def _bounded_fetch(mid):
+                    async with sem:
+                        return await _fetch_and_sanitize(mid)
+
+                tasks = [_bounded_fetch(mid) for mid in to_fetch]
+                results = await asyncio.gather(*tasks)
+                sanitized = [r for r in results if r is not None]
+
+                total_returned += len(sanitized)
+                output_batches.append(sanitized)
+
+            return {"requested": count or total_requested, "returned": total_returned, "batches": output_batches}
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.exception(f"Error in retrieve_sample_batch_emails: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
+
+    async def retrieve_sample_batch_emails_raw(self, payload: Dict[str, Any] = Body(...)):
+        """
+        Accept a JSON payload (same shapes as retrieve_sample_batch_emails) and
+        return full/raw email content per message id. The response contains a
+        list of objects: { message_id, raw, meta? } where `raw` is a string
+        (decoded if base64/raw bytes were provided) or None when not available.
+        """
+        import json, ast, base64
+        from email import message_from_bytes, policy
+
+        try:
+            # Normalize incoming payload (accept JSON object or stringified JSON)
+            if not isinstance(payload, dict):
+                if isinstance(payload, str):
+                    try:
+                        payload = json.loads(payload)
+                    except Exception:
+                        try:
+                            payload = ast.literal_eval(payload)
+                        except Exception:
+                            raise HTTPException(status_code=400, detail="request body must be a JSON object")
+                else:
+                    raise HTTPException(status_code=400, detail="request body must be a JSON object")
+
+            # Support wrapper with 'input' containing a stringified JSON
+            raw_input = payload.get("input")
+            if isinstance(raw_input, str):
+                try:
+                    payload = json.loads(raw_input)
+                except Exception:
+                    try:
+                        payload = ast.literal_eval(raw_input)
+                    except Exception:
+                        raise HTTPException(status_code=400, detail="input field must contain valid JSON")
+
+            # Extract batches / chunk_size / count
+            batches_raw = payload.get("batches") or payload.get("batched_message_ids") or payload.get("message_ids")
+            chunk_size = payload.get("chunk_size")
+            count = payload.get("count")
+
+            if batches_raw is None:
+                raise HTTPException(status_code=400, detail="payload must include 'batches' or 'batched_message_ids'")
+
+            # Allow batches to be passed as a JSON string
+            if isinstance(batches_raw, str):
+                try:
+                    batches_raw = json.loads(batches_raw)
+                except Exception:
+                    try:
+                        batches_raw = ast.literal_eval(batches_raw)
+                    except Exception:
+                        raise HTTPException(status_code=400, detail="batches must be a list or a stringified list")
+
+            # Normalize to list[list[str]] (single flat list becomes one batch)
+            if isinstance(batches_raw, list) and batches_raw and not any(isinstance(i, list) for i in batches_raw):
+                batches = [[str(i) for i in batches_raw if i]]
+            else:
+                if not isinstance(batches_raw, list):
+                    raise HTTPException(status_code=400, detail="batches must be a list of lists")
+                batches = []
+                for b in batches_raw:
+                    if not isinstance(b, list):
+                        raise HTTPException(status_code=400, detail="each batch must be a list of message ids")
+                    clean = [str(x) for x in b if x]
+                    if clean:
+                        batches.append(clean)
+
+            # Validate chunk_size
+            try:
+                chunk_size = None if chunk_size is None else int(chunk_size)
+            except Exception:
+                raise HTTPException(status_code=400, detail="chunk_size must be an integer if provided")
+
+            # Build list of ids to fetch
+            organizer = self.server.organizer_factory.create_organizer()
+            flat_ids = [str(mid) for batch in batches for mid in batch if mid]
+            if not flat_ids:
+                return {"requested": count or 0, "returned": 0, "messages": []}
+
+            if not hasattr(organizer, "fetch_email"):
+                return {"requested": count or len(flat_ids), "returned": len(flat_ids), "message_ids": flat_ids}
+
+            to_fetch = flat_ids if not chunk_size or chunk_size <= 0 else flat_ids[:int(chunk_size)]
+
+            # Bounded concurrency
+            sem = asyncio.Semaphore(min(10, max(1, len(to_fetch))))
+
+            MAX_RAW_LEN = 400
+
+            def _truncate_raw(s: Optional[str]) -> Optional[str]:
+                if s is None:
+                    return None
+                try:
+                    s = str(s)
+                except Exception:
+                    return None
+                if len(s) > MAX_RAW_LEN:
+                    return s[:MAX_RAW_LEN]
+                return s
+
+            def _make_result(mid: str, raw: Optional[str] = None, **extras):
+                return_dict = {"message_id": mid, "raw": _truncate_raw(raw)}
+                # include any extra metadata (meta, data, etc.)
+                for k, v in extras.items():
+                    return_dict[k] = v
+                return return_dict
+
+            async def _fetch_raw(mid: str):
+                async with sem:
+                    try:
+                        out = organizer.fetch_email(mid)
+                        res = await out if asyncio.iscoroutine(out) else await asyncio.to_thread(out)
+
+                        # If bytes, decode
+                        if isinstance(res, (bytes, bytearray)):
+                            try:
+                                return _make_result(mid, res.decode("utf-8", errors="replace"))
+                            except Exception:
+                                return _make_result(mid, str(res))
+
+                        # If dict, look for common raw fields or gmail body.data
+                        if isinstance(res, dict):
+                            raw_val = None
+                            for k in ("raw", "raw_message", "raw_rfc822", "rawEmail"):
+                                raw_val = res.get(k)
+                                if raw_val:
+                                    break
+
+                            if not raw_val:
+                                body = res.get("raw_body") or {}
+                                if isinstance(body, dict):
+                                    raw_val = body.get("data")
+
+                            if raw_val:
+                                # bytes
+                                if isinstance(raw_val, (bytes, bytearray)):
+                                    try:
+                                        raw_str = raw_val.decode("utf-8", errors="replace")
+                                    except Exception:
+                                        raw_str = str(raw_val)
+                                elif isinstance(raw_val, str):
+                                    # attempt base64 decode; if fails, return as-is
+                                    try:
+                                        raw_bytes = base64.urlsafe_b64decode(raw_val + "===")
+                                        raw_str = raw_bytes.decode("utf-8", errors="replace")
+                                    except Exception:
+                                        raw_str = raw_val
+                                else:
+                                    raw_str = str(raw_val)
+
+                                meta = {k: v for k, v in res.items() if k not in ("raw", "body")}
+                                return _make_result(mid, raw_str, meta=meta)
+
+                            # no raw content found, include the dict
+                            return _make_result(mid, None, data=res)
+
+                        # Objects with .raw attribute
+                        if hasattr(res, "raw"):
+                            r = getattr(res, "raw")
+                            if isinstance(r, (bytes, bytearray)):
+                                try:
+                                    return _make_result(mid, r.decode("utf-8", errors="replace"))
+                                except Exception:
+                                    return _make_result(mid, str(r))
+                            return _make_result(mid, str(r))
+
+                        # email.message objects
+                        if hasattr(res, "as_string"):
+                            try:
+                                return _make_result(mid, res.as_string())
+                            except Exception:
+                                pass
+                        if hasattr(res, "as_bytes"):
+                            try:
+                                b = res.as_bytes()
+                                return _make_result(mid, b.decode("utf-8", errors="replace"))
+                            except Exception:
+                                pass
+
+                        # Fallback: try to parse common raw bytes in attributes
+                        try:
+                            # sometimes organizer returns {'payload': {'raw': '...'}}
+                            if isinstance(res, dict):
+                                p = res.get("payload") or res.get("message")
+                                if isinstance(p, dict):
+                                    rv = p.get("raw") or p.get("raw_body", {}).get("data")
+                                    if rv:
+                                        if isinstance(rv, str):
+                                            try:
+                                                raw_bytes = base64.urlsafe_b64decode(rv + "===")
+                                                return _make_result(mid, raw_bytes.decode("utf-8", errors="replace"))
+                                            except Exception:
+                                                return _make_result(mid, rv)
+                        except Exception:
+                            pass
+
+                        # Final fallback
+                        return _make_result(mid, str(res))
+                    except Exception as e:
+                        logger.debug(f"failed to fetch raw {mid}: {e}")
+                        return None
+
+            tasks = [_fetch_raw(mid) for mid in to_fetch]
+            results = await asyncio.gather(*tasks)
+            sanitized = [r for r in results if r is not None]
+
+            return {"requested": count or len(to_fetch), "returned": len(sanitized), "messages": sanitized}
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.exception(f"Error in retrieve_sample_batch_emails_raw: {e}")
+            raise HTTPException(status_code=500, detail=str(e))

@@ -482,4 +482,56 @@ class StorageManager:
             
         return True    
         
+    async def get_labels(self) -> List[Dict[str, str]]:
+        """Return a list of Gmail labels.
+
+        Tries Redis cache first (if a RedisCacheManager is wired to the application and
+        exposed on self.redis_cache_manager), then falls back to reading the
+        `gmail_labels` table from Postgres. Returns a list of dicts with keys
+        'id', 'name', and 'type' to match organizer output.
+        """
+        labels: List[Dict[str, str]] = []
+
+        # Try Redis cache if available
+        try:
+            redis_mgr = getattr(self, 'redis_cache_manager', None)
+            if redis_mgr is not None:
+                logger.debug("Attempting to load labels from Redis cache via redis_cache_manager")
+                cache = await redis_mgr.get_label_cache()
+                if cache and isinstance(cache, dict):
+                    # Cache stores mapping of category->label_id; convert to list
+                    for name, lid in cache.items():
+                        labels.append({
+                            'id': str(lid),
+                            'name': str(name),
+                            'type': 'user'
+                        })
+                    if labels:
+                        logger.info(f"📋 Returning {len(labels)} labels from Redis cache")
+                        return labels
+        except Exception as e:
+            logger.warning(f"Failed to load labels from Redis cache: {e}")
+
+        # Fall back to Postgres gmail_labels table if DB is available
+        try:
+            if self.database:
+                logger.debug("Querying postgres gmail_labels table for labels")
+                rows = await self.database.fetch_all("""
+                    SELECT label_id, name, type FROM gmail_labels ORDER BY name ASC
+                """)
+                for r in rows:
+                    labels.append({
+                        'id': str(r['label_id']),
+                        'name': str(r['name']),
+                        'type': str(r['type']) if 'type' in r else 'user'
+                    })
+                if labels:
+                    logger.info(f"📋 Returning {len(labels)} labels from Postgres gmail_labels table")
+                    return labels
+        except Exception as e:
+            logger.warning(f"Failed to read gmail_labels from Postgres: {e}")
+
+        logger.info("No labels found in Redis or Postgres; returning empty list")
+        return []
+        
         

@@ -950,6 +950,40 @@ class GmailAIOrganizer:
             print(f"    ⚠️  Error creating/getting label {label_name}: {e}")
             raise
 
+    def list_labels(self) -> List[Dict[str, str]]:
+        """List Gmail labels for the authenticated user.
+
+        Returns a list of dicts with at least `id` and `name` keys. Returns an
+        empty list if the service is not authenticated or on any error so the
+        caller can continue without raising.
+        """
+        if not self.service:
+            # Try to authenticate if possible
+            try:
+                authenticated = self.authenticate()
+            except Exception:
+                authenticated = False
+
+            if not authenticated or not self.service:
+                print("❌ Gmail service not authenticated - cannot list labels")
+                return []
+
+        try:
+            resp = self.service.users().labels().list(userId='me').execute()
+            labels = resp.get('labels', []) if isinstance(resp, dict) else []
+            result = []
+            for l in labels:
+                # Normalize to id/name
+                result.append({
+                    'id': l.get('id'),
+                    'name': l.get('name'),
+                    'type': l.get('type') if 'type' in l else None
+                })
+            return result
+        except Exception as e:
+            print(f"❌ Error listing Gmail labels: {e}")
+            return []
+
 def main():
     """Test the Gmail integration"""
     print("🧪 Testing Gmail AI Organizer...")

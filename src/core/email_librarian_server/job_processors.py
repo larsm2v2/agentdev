@@ -19,15 +19,23 @@ from .organizer_factory import OrganizerFactory
 logger = logging.getLogger(__name__)
 
 
-async def list_message_ids_in_range(service, query: str, max_ids: int = 1000, page_size: int = 500) -> List[str]:
-    """Page through Gmail messages.list and return up to max_ids message ids."""
+async def list_message_ids_in_range(service, query: str, max_ids: int = 1000, page_size: int = 500, label_ids: Optional[List[str]] = None) -> List[str]:
+    """Page through Gmail messages.list and return up to max_ids message ids.
+
+    If `label_ids` is provided it will be passed to the Gmail API as
+    `labelIds` (e.g. ['INBOX']) which is the recommended way to exclude
+    archived messages (those without the INBOX label).
+    """
     ids: List[str] = []
     loop = asyncio.get_event_loop()
 
     def list_page(page_token=None):
+        params = {"userId": "me", "q": query, "maxResults": page_size}
         if page_token:
-            return service.users().messages().list(userId='me', q=query, maxResults=page_size, pageToken=page_token).execute()
-        return service.users().messages().list(userId='me', q=query, maxResults=page_size).execute()
+            params["pageToken"] = page_token
+        if label_ids:
+            params["labelIds"] = label_ids
+        return service.users().messages().list(**params).execute()
 
     page_token = None
     while True:
@@ -266,7 +274,8 @@ class ShelvingJobProcessor(BaseJobProcessor):
             try:
                 if hasattr(organizer, 'service') and organizer.service:
                     service = organizer.service
-                    message_ids = await list_message_ids_in_range(service, query, max_ids=max_ids, page_size=page_size)
+                    # Exclude archived messages by requesting only INBOX label ids
+                    message_ids = await list_message_ids_in_range(service, query, max_ids=max_ids, page_size=page_size, label_ids=['INBOX'])
                 else:
                     # Fallback helpers
                     if hasattr(organizer, 'search_messages'):
@@ -325,10 +334,10 @@ class ShelvingJobProcessor(BaseJobProcessor):
                     except Exception:
                         pass
 
-                # Batch-only retrieval: attempt batch_get_messages with retries/backoff
+                # Batch-only retrieval: attempt fetch_email_batches with retries/backoff
                 batch_emails: List[Dict[str, Any]] = []
-                if hasattr(organizer, 'batch_get_messages'):
-                    batch_fn = organizer.batch_get_messages
+                if hasattr(organizer, 'fetch_email_batches'):
+                    batch_fn = organizer.fetch_email_batches
                     for attempt in range(1, batch_attempts + 1):
                         try:
                             # Honor per-organizer rate limiter if attached
@@ -350,9 +359,9 @@ class ShelvingJobProcessor(BaseJobProcessor):
                             if attempt < batch_attempts:
                                 await asyncio.sleep(2 ** attempt)
                     if not batch_emails:
-                        logger.warning(f"Batch_get_messages failed after {batch_attempts} attempts for shelving chunk {idx}; skipping this chunk.")
+                        logger.warning(f"fetch_email_batches failed after {batch_attempts} attempts for shelving chunk {idx}; skipping this chunk.")
                 else:
-                    logger.warning("Organizer does not support batch_get_messages; skipping chunk")
+                    logger.warning("Organizer does not support fetch_email_batches; skipping chunk")
 
                 emails.extend(batch_emails)
 
@@ -470,7 +479,8 @@ class CatalogingJobProcessor(BaseJobProcessor):
                     service = organizer.service
                     max_ids = parameters.get('max_ids', 1000)
                     page_size = min(parameters.get('page_size', 500), 500)
-                    message_ids = await list_message_ids_in_range(service, query, max_ids=max_ids, page_size=page_size)
+                    # Use INBOX label filter to avoid archived messages
+                    message_ids = await list_message_ids_in_range(service, query, max_ids=max_ids, page_size=page_size, label_ids=['INBOX'])
                 else:
                     # Fallback to organizer helpers
                     if hasattr(organizer, 'search_messages'):
@@ -532,10 +542,10 @@ class CatalogingJobProcessor(BaseJobProcessor):
                     except Exception:
                         pass
 
-                # Batch-only retrieval: attempt batch_get_messages with retries/backoff
+                # Batch-only retrieval: attempt fetch_email_batches with retries/backoff
                 batch_emails: List[Dict[str, Any]] = []
-                if hasattr(organizer, 'batch_get_messages'):
-                    batch_fn = organizer.batch_get_messages
+                if hasattr(organizer, 'fetch_email_batches'):
+                    batch_fn = organizer.fetch_email_batches
                     for attempt in range(1, batch_attempts + 1):
                         try:
                             # Honor per-organizer rate limiter if attached
@@ -556,9 +566,9 @@ class CatalogingJobProcessor(BaseJobProcessor):
                             if attempt < batch_attempts:
                                 await asyncio.sleep(2 ** attempt)
                     if not batch_emails:
-                        logger.warning(f"Batch_get_messages failed after {batch_attempts} attempts for chunk {idx}; skipping this chunk.")
+                        logger.warning(f"fetch_email_batches failed after {batch_attempts} attempts for chunk {idx}; skipping this chunk.")
                 else:
-                    logger.warning("Organizer does not support batch_get_messages; skipping chunk")
+                    logger.warning("Organizer does not support fetch_email_batches; skipping chunk")
 
                 emails.extend(batch_emails)
 

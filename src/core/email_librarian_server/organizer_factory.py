@@ -4,7 +4,7 @@ Factory for creating Gmail organizer instances.
 
 import logging
 import sys
-from typing import Dict, Any, Optional, Union, Protocol, cast
+from typing import Dict, Any, Optional, Union, Protocol, cast, List
 from pathlib import Path
 from src.core.token_bucket import TokenBucket
 
@@ -22,7 +22,7 @@ class GmailOrganizerProtocol(Protocol):
         """Search Gmail messages by query."""
         ...
         
-    def get_message(self, msg_id: str, format: str = "full") -> Dict[str, Any]:
+    def fetch_email(self, msg_id: str, format: str = "full") -> Dict[str, Any]:
         """Get a specific Gmail message by ID."""
         ...
         
@@ -32,6 +32,10 @@ class GmailOrganizerProtocol(Protocol):
         
     def apply_label(self, msg_id: str, label_id: str) -> bool:
         """Apply a label to a message."""
+        ...
+    
+    def list_labels(self) -> List[Dict[str, Any]]:
+        """Return a list of labels (id/name/type) for the user."""
         ...
 
 
@@ -51,7 +55,7 @@ class OrganizerStub:
         logger.warning("Using stub Gmail organizer - search not available")
         return {"status": "error", "messages": [], "message": "Gmail organizer not available"}
         
-    def get_message(self, msg_id: str, format: str = "full") -> Dict[str, Any]:
+    def fetch_email(self, msg_id: str, format: str = "full") -> Dict[str, Any]:
         logger.warning("Using stub Gmail organizer - get message not available")
         return {"status": "error", "message": "Gmail organizer not available"}
         
@@ -62,6 +66,11 @@ class OrganizerStub:
     def apply_label(self, msg_id: str, label_id: str) -> bool:
         logger.warning("Using stub Gmail organizer - label application not available")
         return False
+
+    def list_labels(self) -> List[Dict[str, Any]]:
+        """Return an empty label list (safe stub)."""
+        logger.warning("Using stub Gmail organizer - list_labels not available; returning empty list")
+        return []
 
 
 class OrganizerFactory:
@@ -88,9 +97,9 @@ class OrganizerFactory:
             sys.path.append('./src/core')
 
             # Try to import the organizers
-            from src.gmail.fast_gmail_organizer import HighPerformanceGmailOrganizer
+            from src.gmail.fast_gmail_organizer import AsyncHighPerformanceGmailOrganizer
             from src.gmail.gmail_organizer import GmailAIOrganizer
-            self.high_performance_organizer = HighPerformanceGmailOrganizer
+            self.high_performance_organizer = AsyncHighPerformanceGmailOrganizer
             self.standard_organizer = GmailAIOrganizer
             self.organizers_available = True
             logger.info("✅ Gmail organizers available")
@@ -122,7 +131,7 @@ class OrganizerFactory:
             self.get_container_batch_emails_with_storage = None
             self.container_gmail_available = False
     
-    def create_organizer(self, organizer_type: str = "high_performance") -> Any:
+    def create_organizer(self, organizer_type: str = "high_performance", server: Any = None) -> Any:
         """
         Create a Gmail organizer instance.
         
@@ -134,7 +143,13 @@ class OrganizerFactory:
         """
         if not self.organizers_available:
             logger.warning("Gmail organizers not available, returning stub")
-            return OrganizerStub()
+            stub = OrganizerStub()
+            if server is not None:
+                try:
+                    setattr(stub, "server", server)
+                except Exception:
+                    pass
+            return stub
             
         if organizer_type == "high_performance" and self.high_performance_organizer:
             logger.info("Creating high performance Gmail organizer")
@@ -142,23 +157,31 @@ class OrganizerFactory:
                 credentials_file=self.credentials_path,
                 token_file=self.token_path
             )
-            # Attach a per-organizer token-bucket limiter (1 token/sec, burst 2)
-            try:
-                org.rate_limiter = TokenBucket(rate=self.limiter_rate, capacity=self.limiter_capacity)
-            except Exception:
-                pass
+            if server is not None:
+                try:
+                    setattr(org, "server", server)
+                except Exception:
+                    pass
             return org
+       
         elif organizer_type == "standard" and self.standard_organizer:
             logger.info("Creating standard Gmail organizer")
             org = self.standard_organizer(
                 credentials_file=self.credentials_path,
                 token_file=self.token_path
             )
-            try:
-                org.rate_limiter = TokenBucket(rate=self.limiter_rate, capacity=self.limiter_capacity)
-            except Exception:
-                pass
+            if server is not None:
+                try:
+                    setattr(org, "server", server)
+                except Exception:
+                    pass
             return org
         else:
             logger.warning(f"Unknown organizer type '{organizer_type}', returning stub")
-            return OrganizerStub()
+            stub = OrganizerStub()
+            if server is not None:
+                try:
+                    setattr(stub, "server", server)
+                except Exception:
+                    pass
+            return stub

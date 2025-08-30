@@ -137,7 +137,7 @@ GET  /api/shelving/stats          // Shelving-specific stats
 GET  /api/cataloging/progress     // Cataloging progress
 GET  /api/reclassification/results // Reclassification results
 GET  /api/categories              // Available categories
-GET  /api/reclassification/labels // Available labels
+GET  /api/labels // Available labels
 
 // Export
 GET  /api/export/stats            // Export statistics data

@@ -91,6 +91,10 @@ class EmailLibrarianController {
       },
     };
     this.eventListeners = {};
+    // WebSocket connection helpers
+    this._wsConnected = false;
+    this._wsConnectedPromise = null;
+    this._wsConnectedResolve = null;
   }
 
   // Initialize the controller
@@ -119,7 +123,24 @@ class EmailLibrarianController {
 
     this.websocket.onopen = () => {
       console.log("🔌 WebSocket connected");
+      this._wsConnected = true;
+      // resolve any waiter
+      try {
+        if (this._wsConnectedResolve) this._wsConnectedResolve();
+      } catch (e) {
+        console.warn("Error resolving websocket connected promise:", e);
+      }
       this.emit("websocket:connected");
+
+      // Refresh reclassification labels immediately after reconnect
+      (async () => {
+        try {
+          const labels = await this.getAvailableLabels();
+          this.emit("labels:updated", labels);
+        } catch (e) {
+          console.warn("Failed to refresh labels after websocket connect:", e);
+        }
+      })();
     };
 
     this.websocket.onmessage = (event) => {
@@ -346,26 +367,92 @@ class EmailLibrarianController {
 
   // Reclassification Methods
   async getAvailableLabels() {
+    // Wait for websocket to be connected (short timeout) before trying GET
     try {
-      const url = `${this.apiBase}/reclassification/labels`;
+      await this.waitForWebSocketConnected(10000);
+    } catch (e) {
+      console.warn(
+        "WebSocket not connected before labels fetch, proceeding anyway:",
+        e
+      );
+    }
+
+    try {
+      const url = `${this.apiBase}/labels`;
       const response = await fetch(url);
 
       if (!response.ok) {
         // If endpoint does not exist (404) or other server error, return empty list
         if (response.status === 404) {
-          console.warn(`⚠️ Labels endpoint not found (404): ${url} — returning empty labels list`);
+          console.warn(
+            `⚠️ Labels endpoint not found (404): ${url} — returning empty labels list`
+          );
           return [];
         }
         // For other non-OK responses, throw to allow fallback handling upstream
         throw new Error(`HTTP ${response.status}`);
       }
 
-      return await response.json();
+      const labels = await response.json();
+      // Convert any proxied/reactive array into a plain array before caching/logging
+      let plainLabels;
+      try {
+        if (Array.isArray(labels)) {
+          // slice() will return a shallow copy and unwrap proxies in most frameworks
+          plainLabels = labels.slice();
+        } else {
+          // Try to coerce any iterable to array, otherwise empty
+          plainLabels = Array.from(labels || []);
+        }
+      } catch (e) {
+        plainLabels = [];
+      }
+
+      // Short-term in-memory cache: replace on each successful GET
+      try {
+        this._labelsCache = plainLabels;
+      } catch (e) {
+        console.warn("⚠️ Unable to set labels cache:", e);
+      }
+
+      // Log the plain array so console shows contents instead of Proxy(Array)
+      console.log("📥 Reclassification labels received:", plainLabels);
+      return this._labelsCache;
     } catch (error) {
       // Network or unexpected error — log and return empty list so UI can continue
-      console.warn("⚠️ Failed to get available labels, returning empty list:", error);
+      console.warn(
+        "⚠️ Failed to get available labels, returning empty list:",
+        error
+      );
       return [];
     }
+  }
+
+  // Wait for websocket ready with timeout (ms)
+  waitForWebSocketConnected(timeoutMs = 10000) {
+    if (this._wsConnected) return Promise.resolve();
+    if (!this._wsConnectedPromise) {
+      this._wsConnectedPromise = new Promise((resolve) => {
+        this._wsConnectedResolve = resolve;
+      });
+    }
+
+    // Race with timeout
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        reject(new Error("timeout waiting for websocket connected"));
+      }, timeoutMs);
+
+      this._wsConnectedPromise
+        .then(() => {
+          clearTimeout(timer);
+          resolve();
+        })
+        .catch((e) => {
+          clearTimeout(timer);
+          reject(e);
+        });
+    });
   }
 
   async startReclassification(config) {
@@ -565,6 +652,32 @@ function enhancedEmailLibrarianApp() {
       this.controller.on("websocket:connected", () => {
         this.connectionStatus = "connected";
         this.showNotification("Connected to Email Librarian", "success");
+      });
+
+      this.controller.on("labels:updated", (labels) => {
+        try {
+          const arr = Array.isArray(labels) ? labels : [];
+          const prevCount = Array.isArray(this.availableLabels)
+            ? this.availableLabels.length
+            : 0;
+          this.availableLabels = arr;
+          // Log a compact JSON representation for easier debugging
+          try {
+            console.log(
+              "📥 Reclassification labels (json):",
+              JSON.stringify(arr)
+            );
+          } catch (e) {
+            console.log("📥 Reclassification labels:", arr);
+          }
+
+          // Only show a toast when the count actually changes
+          if (arr.length !== prevCount) {
+            this.showNotification(`${arr.length} labels available`, "info");
+          }
+        } catch (e) {
+          console.warn("Failed to apply updated labels to UI:", e);
+        }
       });
 
       this.controller.on("function:status_changed", (data) => {
