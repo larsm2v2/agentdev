@@ -8,6 +8,9 @@ from fastapi import APIRouter as FastAPIRouter, BackgroundTasks, Body, Depends, 
 from pydantic import BaseModel
 import asyncio
 
+# Import the advanced cataloging implementation
+from .advanced_cataloging import start_advanced_cataloging
+
 logger = logging.getLogger(__name__)
 
 # Pydantic models
@@ -76,8 +79,19 @@ class APIRouter:
         self.router.get("/functions/shelving/progress")(self.get_shelving_progress)
 
         # Cataloging endpoints
+        # Standard cataloging - uses a single processor approach
         self.router.post("/functions/cataloging/start")(self.start_cataloging)
+        # Advanced cataloging - uses the processor pipeline for more flexibility and control:
+        # 1. MessageIDRetrievalProcessor - Get message IDs in date range
+        # 2. MessageIDBatchProcessor - Split message IDs into batches
+        # 3. EmailBatchRetrievalProcessor - Retrieve email content for each batch
+        # 4. AILabelAssignmentProcessor - Assign AI labels to emails
+        # 5. GmailLabelProcessor - Apply labels to Gmail
+        self.router.post("/functions/cataloging/advanced")(self.start_advanced_cataloging)
         self.router.get("/functions/cataloging/progress")(self.get_cataloging_progress)
+        
+        # Shelving endpoints
+        self.router.post("/functions/shelving/start")(self.start_shelving)
         self.router.get("/functions/cataloging/categories")(self.get_categories)
 
         # Reclassification labels endpoint (frontend expects GET /api/labels)
@@ -285,6 +299,118 @@ class APIRouter:
             "job_id": recent_job_id
         }
         
+    async def start_shelving(self, background_tasks: BackgroundTasks, parameters: Dict[str, Any] = Body(...)):
+        """
+        Start email shelving process.
+        
+        Args:
+            background_tasks: FastAPI background tasks
+            parameters: Job parameters including batch size and date range
+            
+        Returns:
+            Job information
+        """
+        try:
+            params = parameters or {}
+
+            # normalize common keys (frontend may send startDate / endDate)
+            start = params.get("start_date") or params.get("startDate")
+            end = params.get("end_date") or params.get("endDate")
+            if not start or not end:
+                raise HTTPException(status_code=400, detail="start_date and end_date are required")
+
+            # Estimate total message count using existing helper so job metadata can show progress%
+            total_ids = None
+            try:
+                # reuse existing helper to get message ids count
+                res = await self.get_message_ids_range(start, end, params.get("batch_size", 50))
+                logger.info(f"Estimated total emails for shelving between {start} and {end}: {res.get('count', 0)}")
+                total_ids = res.get("count", 0)
+                # ensure the actual message ids are passed into the job parameters
+                # so processors can operate directly without re-building the query.
+                params.setdefault("message_ids", res.get("message_ids", []))
+                params.setdefault("count_of_message_ids", int(total_ids or 0))
+                # also include a simple query string fallback (processor may ignore if message_ids present)
+                try:
+                    params.setdefault("query", f"after:{start} before:{end}")
+                except Exception:
+                    # non-fatal: processors should use message_ids if provided
+                    pass
+                # propagate estimated total into parameters for processors
+                params.setdefault("estimated_total_emails", total_ids)
+                params.setdefault("max_emails", total_ids)
+            except Exception as e:
+                logger.warning(f"Could not estimate total emails for shelving: {e}")
+
+
+            job_config = {"job_type": "shelving", "parameters": params}
+            
+            # Prefer JobManager.create_job when available
+            create_fn = getattr(self.server.job_manager, "create_job", None)
+            if callable(create_fn):
+                job_result_raw = create_fn(job_config, background_tasks)
+                if asyncio.iscoroutine(job_result_raw):
+                    job_result = await job_result_raw
+                else:
+                    job_result = job_result_raw
+                # try to persist total_count metadata if possible
+                try:
+                    # job_result may be nested {"job": {...}} or a dict with job_id
+                    j_id = None
+                    if isinstance(job_result, dict):
+                        job = job_result.get("job")
+                        if job and isinstance(job, dict):
+                            j_id = job.get("job_id") or job.get("id")
+                        else:
+                            j_id = job_result.get("job_id") or job_result.get("id")
+                    if j_id and hasattr(self.server.job_manager, "update_job_metadata"):
+                            logger.info(f"start_shelving: attaching total_count={total_ids} to job {j_id}")
+                            await self.server.job_manager.update_job_metadata(j_id, {"total_count": total_ids})
+                            try:
+                                if hasattr(self.server.job_manager, "active_jobs") and j_id in self.server.job_manager.active_jobs:
+                                    self.server.job_manager.active_jobs[j_id]["total_count"] = int(total_ids) if total_ids is not None else self.server.job_manager.active_jobs[j_id].get("total_count")
+                                    logger.info(f"start_shelving: in-memory active_jobs[{j_id}].total_count set => {self.server.job_manager.active_jobs[j_id].get('total_count')}")
+                            except Exception:
+                                logger.debug("start_shelving: failed to set in-memory total_count")
+                except Exception:
+                    logger.debug("Failed to attach total_count metadata to job")
+
+                return {"status": "success", "message": "Shelving started", "job": job_result}
+
+            # Fallback: if job manager isn't implemented/doesn't start worker, start processor directly
+            import uuid, time
+            job_id = str(uuid.uuid4())
+            try:
+                # register minimal active job for progress endpoints if job_manager.active_jobs exists
+                if hasattr(self.server.job_manager, "active_jobs"):
+                    self.server.job_manager.active_jobs[job_id] = {
+                        "job_type": "shelving",
+                        "status": "running",
+                        "start_time": time.time(),
+                        "processed_count": 0,
+                        "total_count": total_ids or 0,
+                    }
+            except Exception:
+                logger.debug("Could not register job in job_manager.active_jobs")
+                
+            # Return response before processing starts
+            response = {
+                "job_id": job_id,
+                "job_type": "shelving",
+                "status": "scheduled",
+                "message": "Shelving job scheduled",
+            }
+            
+            if total_ids is not None:
+                response["count_of_message_ids"] = str(int(total_ids))
+                response["estimated_total_emails"] = str(int(total_ids))
+                
+            return response
+                
+        except Exception as e:
+            logger.error(f"Error starting shelving: {e}")
+            raise HTTPException(status_code=500, detail=f"Error starting shelving: {str(e)}")
+    
     async def start_cataloging(self, background_tasks: BackgroundTasks, parameters: Dict[str, Any] = Body(...)):
         """
         Start email cataloging process.
@@ -297,51 +423,267 @@ class APIRouter:
             Job information
         """
         try:
-            # Create job config with parameters
-            job_config = {
-                "job_type": "cataloging",
-                "parameters": parameters
-            }
-            
-            # Create and start job
-            job_result = await self.server.job_manager.create_job(job_config, background_tasks)
-            
-            return {
-                "status": "success",
-                "message": "Cataloging started",
-                "job": job_result
-            }
-            
+            params = parameters or {}
+
+            # normalize common keys (frontend may send startDate / endDate)
+            start = params.get("start_date") or params.get("startDate")
+            end = params.get("end_date") or params.get("endDate")
+            if not start or not end:
+                raise HTTPException(status_code=400, detail="start_date and end_date are required")
+
+            # Estimate total message count using existing helper so job metadata can show progress%
+            total_ids = None
+            try:
+                # reuse existing helper to get message ids count
+                res = await self.get_message_ids_range(start, end, params.get("batch_size", 50))
+                logger.info(f"Estimated total emails for cataloging between {start} and {end}: {res.get('count', 0)}")
+                total_ids = res.get("count", 0)
+                # ensure the actual message ids are passed into the job parameters
+                # so processors can operate directly without re-building the query.
+                params.setdefault("message_ids", res.get("message_ids", []))
+                params.setdefault("count_of_message_ids", int(total_ids or 0))
+                # also include a simple query string fallback (processor may ignore if message_ids present)
+                try:
+                    params.setdefault("query", f"after:{start} before:{end}")
+                except Exception:
+                    # non-fatal: processors should use message_ids if provided
+                    pass
+                # propagate estimated total into parameters for processors
+                params.setdefault("estimated_total_emails", total_ids)
+                params.setdefault("max_emails", total_ids)
+            except Exception as e:
+                logger.warning(f"Could not estimate total emails for cataloging: {e}")
+
+
+            job_config = {"job_type": "cataloging", "parameters": params}
+
+            # Prefer JobManager.create_job when available
+            create_fn = getattr(self.server.job_manager, "create_job", None)
+            if callable(create_fn):
+                job_result_raw = create_fn(job_config, background_tasks)
+                if asyncio.iscoroutine(job_result_raw):
+                    job_result = await job_result_raw
+                else:
+                    job_result = job_result_raw
+                # try to persist total_count metadata if possible
+                try:
+                    # job_result may be nested {"job": {...}} or a dict with job_id
+                    j_id = None
+                    if isinstance(job_result, dict):
+                        job = job_result.get("job")
+                        if job and isinstance(job, dict):
+                            j_id = job.get("job_id") or job.get("id")
+                        else:
+                            j_id = job_result.get("job_id") or job_result.get("id")
+                    if j_id and hasattr(self.server.job_manager, "update_job_metadata"):
+                            logger.info(f"start_cataloging: attaching total_count={total_ids} to job {j_id}")
+                            await self.server.job_manager.update_job_metadata(j_id, {"total_count": total_ids})
+                            try:
+                                if hasattr(self.server.job_manager, "active_jobs") and j_id in self.server.job_manager.active_jobs:
+                                    self.server.job_manager.active_jobs[j_id]["total_count"] = int(total_ids) if total_ids is not None else self.server.job_manager.active_jobs[j_id].get("total_count")
+                                    logger.info(f"start_cataloging: in-memory active_jobs[{j_id}].total_count set => {self.server.job_manager.active_jobs[j_id].get('total_count')}")
+                            except Exception:
+                                logger.debug("start_cataloging: failed to set in-memory total_count")
+                except Exception:
+                    logger.debug("Failed to attach total_count metadata to job")
+
+                return {"status": "success", "message": "Cataloging started", "job": job_result}
+
+            # Fallback: if job manager isn't implemented/doesn't start worker, start processor directly
+            import uuid, time
+            job_id = str(uuid.uuid4())
+            try:
+                # register minimal active job for progress endpoints if job_manager.active_jobs exists
+                if hasattr(self.server.job_manager, "active_jobs"):
+                    self.server.job_manager.active_jobs[job_id] = {
+                        "job_type": "cataloging",
+                        "status": "running",
+                        "start_time": time.time(),
+                        "processed_count": 0,
+                        "total_count": total_ids or 0,
+                    }
+            except Exception:
+                logger.debug("Could not register job in job_manager.active_jobs")
+
+            # delegate to server processor as background task
+            bg_target = getattr(self.server, "process_cataloging_job", None)
+            if callable(bg_target):
+                background_tasks.add_task(bg_target, job_id, params)
+                return {"status": "started", "message": "Cataloging job enqueued (fallback)", "job_id": job_id}
+
+            raise HTTPException(status_code=501, detail="No job manager or processor available to start cataloging")
+        except HTTPException:
+            raise
         except Exception as e:
             logger.error(f"Failed to start cataloging: {e}")
             raise HTTPException(status_code=500, detail=str(e))
+    
+    async def start_advanced_cataloging(self, background_tasks: BackgroundTasks, parameters: Dict[str, Any] = Body(...)):
+        """
+        Start advanced email cataloging process using the processor pipeline.
+        
+        This uses a pipeline of processors:
+        1. MessageIDRetrievalProcessor - Retrieve message IDs in the date range
+        2. MessageIDBatchProcessor - Split message IDs into batches
+        3. EmailBatchRetrievalProcessor - Retrieve email content for each batch
+        4. AILabelAssignmentProcessor - Assign AI labels to emails
+        5. GmailLabelProcessor - Apply labels to Gmail messages
+        
+        Args:
+            background_tasks: FastAPI background tasks
+            parameters: Job parameters including batch size and date range
+                
+        Returns:
+            Job information
+        """
+        return await start_advanced_cataloging(self, background_tasks, parameters)
 
     async def get_cataloging_progress(self):
         """Get current progress of active cataloging job."""
         try:
-            # Get the most recent cataloging job (including completed ones)
-            recent_job_id = self.server.job_manager.get_most_recent_job_id("cataloging")
-            if not recent_job_id:
-                return {"status": "no_active_job", "progress": 0}
+            logger.debug("Starting get_cataloging_progress endpoint call")
             
-            job_status = await self.server.job_manager.get_job_status(recent_job_id)
-            
-            # Extract progress information
-            processed = job_status.get("processed_count", 0)
-            total = job_status.get("total_count", 1)  # Prevent division by zero
-            progress = processed / total if total > 0 else 0
-            
-            return {
-                "status": job_status.get("status", "unknown"),
-                "progress": progress,
-                "processed_count": processed,
-                "total_count": total,
-                "job_id": recent_job_id,
-                "results": job_status.get("results", {})
+            # Default response in case of any issues
+            default_response = {
+                "status": "unknown",
+                "progress": 0.0,
+                "processed_count": 0,
+                "total_count": 1,
+                "job_id": None,
+                "results": {},
+                "message_ids_retrieved": False,
+                "count_of_message_ids": 0,
+                "message_ids_batched": False,
+                "batched_ids": False,
+                "emails_retrieved": False
             }
+            
+            # Get the most recent cataloging job (including completed ones)
+            if not hasattr(self.server, "job_manager"):
+                logger.error("job_manager not available on server instance")
+                return default_response
+                
+            try:
+                recent_job_id = self.server.job_manager.get_most_recent_job_id("cataloging")
+                if not recent_job_id:
+                    logger.info("No active cataloging job found")
+                    default_response["status"] = "no_active_job"
+                    return default_response
+            except Exception as e:
+                logger.error(f"Error getting most recent job ID: {e}")
+                return default_response
+            
+            # Get job status
+            try:
+                job_status = await self.server.job_manager.get_job_status(recent_job_id)
+                if not job_status or not isinstance(job_status, dict):
+                    logger.error(f"Invalid job status returned for {recent_job_id}: {job_status}")
+                    default_response["job_id"] = recent_job_id
+                    return default_response
+            except Exception as e:
+                logger.error(f"Error getting job status for {recent_job_id}: {e}")
+                default_response["job_id"] = recent_job_id
+                return default_response
+            
+            # Extract progress information with defensive coding
+            processed = 0
+            total = 1
+            progress = 0.0
+            
+            try:
+                processed = job_status.get("processed_count")
+                if processed is None:
+                    processed = 0
+                else:
+                    try:
+                        processed = int(processed)
+                    except (ValueError, TypeError):
+                        logger.warning(f"Invalid processed_count: {processed}, using 0")
+                        processed = 0
+                
+                total = job_status.get("total_count")
+                if total is None or total == 0:  # Prevent division by zero
+                    total = 1
+                else:
+                    try:
+                        total = int(total)
+                        if total <= 0:
+                            total = 1
+                    except (ValueError, TypeError):
+                        logger.warning(f"Invalid total_count: {total}, using 1")
+                        total = 1
+                        
+                try:
+                    progress = float(processed) / float(total)
+                except (ZeroDivisionError, TypeError, ValueError):
+                    progress = 0.0
+            except Exception as e:
+                logger.error(f"Error calculating progress: {e}")
+            
+            # Extract tracking metadata if available
+            metadata = {}
+            try:
+                if job_status.get("metadata") is not None and isinstance(job_status.get("metadata"), dict):
+                    metadata = job_status.get("metadata", {})
+                elif (job_status.get("results") is not None and 
+                      isinstance(job_status.get("results"), dict) and 
+                      job_status.get("results", {}).get("metadata") is not None and
+                      isinstance(job_status.get("results", {}).get("metadata"), dict)):
+                    metadata = job_status.get("results", {}).get("metadata", {})
+            except Exception as e:
+                logger.error(f"Error extracting metadata: {e}")
+                
+            # Safely get tracking fields
+            def safe_bool(value, default=False):
+                if value is None:
+                    return default
+                try:
+                    return bool(value)
+                except (ValueError, TypeError):
+                    return default
+                    
+            def safe_int(value, default=0):
+                if value is None:
+                    return default
+                try:
+                    return int(value)
+                except (ValueError, TypeError):
+                    return default
+            
+            # Build response with all safety checks
+            response = {
+                "status": str(job_status.get("status", "unknown")),
+                "progress": float(progress) if progress is not None else 0.0,
+                "processed_count": safe_int(processed),
+                "total_count": safe_int(total),
+                "job_id": str(recent_job_id) if recent_job_id else None,
+                "results": job_status.get("results", {}) if isinstance(job_status.get("results"), dict) else {},
+                # Include tracking fields with extensive safety checks
+                "message_ids_retrieved": safe_bool(metadata.get("message_ids_retrieved")) if metadata else False,
+                "count_of_message_ids": safe_int(metadata.get("count_of_message_ids")) if metadata else 0,
+                "message_ids_batched": safe_bool(metadata.get("message_ids_batched")) if metadata else False,
+                "batched_ids": safe_bool(metadata.get("batched_ids")) if metadata else False,
+                "emails_retrieved": safe_bool(metadata.get("emails_retrieved")) if metadata else False
+            }
+            
+            logger.debug(f"Returning cataloging progress: {response}")
+            return response
         except Exception as e:
-            logger.error(f"Error getting cataloging progress: {e}")
-            raise HTTPException(status_code=500, detail=str(e))
+            logger.exception(f"Unhandled error in get_cataloging_progress: {e}")
+            return {
+                "status": "error",
+                "message": f"Internal server error: {str(e)}",
+                "progress": 0.0,
+                "processed_count": 0,
+                "total_count": 1,
+                "job_id": None,
+                "results": {},
+                "message_ids_retrieved": False,
+                "count_of_message_ids": 0,
+                "message_ids_batched": False,
+                "batched_ids": False,
+                "emails_retrieved": False
+            }
 
     async def cancel_job(self, job_id: str):
         """Cancel a job by id (best-effort)."""
@@ -645,7 +987,7 @@ class APIRouter:
             # Prefer direct service-backed, paged listing (uses labelIds to exclude archived)
             try:
                 # local import of the helper in same package
-                from .job_processors import list_message_ids_in_range
+                from .job_processors.job_processors import list_message_ids_in_range
 
                 if hasattr(organizer, "service") and getattr(organizer, "service", None):
                     try:

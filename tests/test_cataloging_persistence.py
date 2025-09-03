@@ -1,7 +1,7 @@
 import asyncio
 import pytest
 import uuid
-from src.core.email_librarian_server.job_processors import CatalogingJobProcessor
+from core.email_librarian_server.job_processors.job_processors import CatalogingJobProcessor
 
 
 class FakeStorage:
@@ -18,8 +18,10 @@ class FakeStorage:
         return True
 
 
-class FakeOrganizerFactory:
-    def create_organizer(self, organizer_type: str = "high_performance"):
+from core.email_librarian_server.organizer_factory import OrganizerFactory
+
+class FakeOrganizerFactory(OrganizerFactory):
+    def create_organizer(self, organizer_type: str = "high_performance", server=None, config=None):
         class O:
             async def search_emails(self, query=None, max_results=10):
                 return [

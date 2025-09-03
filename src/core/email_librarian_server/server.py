@@ -19,7 +19,7 @@ from .auth_manager import GmailAuthManager
 from .storage_manager import StorageManager
 from .organizer_factory import OrganizerFactory
 from .job_manager import JobManager
-from .job_processors import ShelvingJobProcessor, CatalogingJobProcessor
+from .job_processors.job_processors import ShelvingJobProcessor, CatalogingJobProcessor
 from .api_router import APIRouter
 from ..metrics.endpoint import register_metrics
 from ...dashboard.metrics_integration import metrics_collector as dashboard_metrics_collector
@@ -176,19 +176,66 @@ class EnhancedEmailLibrarianServer:
             # Non-fatal if seeding fails
             logger.exception("Error while seeding function_state defaults")
         
-        # Register job processors
+        # Register job processors (pass job_manager so processors can report progress)
         shelving_processor = ShelvingJobProcessor(
             database=self.storage_manager.database,
-            organizer_factory=self.organizer_factory
+            organizer_factory=self.organizer_factory,
+            job_manager=self.job_manager
         )
         self.job_manager.register_processor("shelving", shelving_processor)
-        
+
         cataloging_processor = CatalogingJobProcessor(
+            database=self.storage_manager.database,
+            organizer_factory=self.organizer_factory,
+            job_manager=self.job_manager,
+            storage_manager=self.storage_manager
+        )
+        self.job_manager.register_processor("cataloging", cataloging_processor)
+        
+        # Register advanced cataloging processors
+        from .job_processors.register_processors import (
+            register_message_id_processor,
+            register_message_id_batch_processor,
+            register_email_batch_processor,
+            register_ai_label_processor,
+            register_gmail_label_processor
+        )
+        
+        # Register all processors needed for advanced cataloging pipeline
+        register_message_id_processor(
+            self.job_manager,
             database=self.storage_manager.database,
             organizer_factory=self.organizer_factory,
             storage_manager=self.storage_manager
         )
-        self.job_manager.register_processor("cataloging", cataloging_processor)
+        
+        register_message_id_batch_processor(
+            self.job_manager,
+            database=self.storage_manager.database,
+            organizer_factory=self.organizer_factory,
+            storage_manager=self.storage_manager
+        )
+        
+        register_email_batch_processor(
+            self.job_manager,
+            database=self.storage_manager.database,
+            organizer_factory=self.organizer_factory,
+            storage_manager=self.storage_manager
+        )
+        
+        register_ai_label_processor(
+            self.job_manager,
+            database=self.storage_manager.database,
+            organizer_factory=self.organizer_factory,
+            storage_manager=self.storage_manager
+        )
+        
+        register_gmail_label_processor(
+            self.job_manager,
+            database=self.storage_manager.database,
+            organizer_factory=self.organizer_factory,
+            storage_manager=self.storage_manager
+        )
         
     # Initial activity broadcasting has been disabled at startup to avoid
     # database writes or early broadcast races during service initialization.

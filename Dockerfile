@@ -48,6 +48,9 @@ COPY install_transformers.py /app/
 COPY . .
 COPY _db_startup_wait.sh /usr/local/bin/_db_startup_wait.sh
 
+# Copy helper scripts into image and make them executable
+COPY --chmod=0755 scripts/*.sh /usr/local/bin/
+
 # Make scripts executable
 RUN chmod +x docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/_db_startup_wait.sh
@@ -95,6 +98,7 @@ COPY migrations/ ./migrations/
 COPY frontend/ ./frontend/
 COPY docker-entrypoint.sh ./
 COPY _db_startup_wait.sh /usr/local/bin/_db_startup_wait.sh
+COPY --chmod=0755 scripts/*.sh /usr/local/bin/
 
 # Create app user for security
 RUN useradd --create-home --shell /bin/bash app

@@ -15,6 +15,9 @@ import asyncio
 import hashlib
 import json
 import os
+import base64
+import email
+from email import policy
 from pathlib import Path
 from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional
@@ -75,7 +78,50 @@ class AsyncHighPerformanceGmailOrganizer(GmailAIOrganizer):
             print(f"❌ Error listing Gmail labels: {e}")
             return []
 
-    # ----------------- Gmail fetch -----------------
+    async def list_message_ids_in_range(self, query: str = "", max_ids: int = 1000, page_size: int = 500, label_ids: Optional[List[str]] = None) -> List[str]:
+            """Return up to max_ids message ids matching query by paging Gmail API (runs in thread)."""
+            if not self.service:
+                try:
+                    authenticated = self.authenticate()
+                    if not authenticated or not self.service:
+                        print("❌ Gmail service not authenticated - cannot list messages")
+                        return []
+                except Exception:
+                    print("❌ Exception during Gmail authentication")
+                    return []
+
+            def sync_list():
+                if not self.service:
+                    authenticated = self.authenticate()
+                    if not authenticated or not self.service:
+                        print("❌ Gmail service not authenticated - cannot list messages (sync_list)")
+                        return []
+                ids: List[str] = []
+                page_token = None
+                while len(ids) < max_ids:
+                    try:
+                        req = self.service.users().messages().list(
+                            userId="me",
+                            q=query or None,
+                            pageToken=page_token,
+                            maxResults=min(page_size, max_ids - len(ids)),
+                            labelIds=label_ids or None
+                        )
+                        resp = req.execute() or {}
+                        for m in resp.get("messages", []):
+                            mid = m.get("id")
+                            if mid:
+                                ids.append(mid)
+                        page_token = resp.get("nextPageToken")
+                        if not page_token:
+                            break
+                    except Exception:
+                        break
+                return ids
+
+            return await asyncio.to_thread(sync_list)
+        # ----------------- Gmail fetch -----------------
+
     async def fetch_email(self, email_id: str) -> Dict[str, Any]:
         """Fetch single email safely using Gmail API (thread-safe)"""
         async with self._gmail_lock:
@@ -95,6 +141,147 @@ class AsyncHighPerformanceGmailOrganizer(GmailAIOrganizer):
                 except Exception:
                     emails.append({"id": email_id, "fetched": False})
             results.append(emails)
+        return results
+
+    # ----------------- Normalization & batch helpers -----------------
+    def _safe_b64decode(self, data: str) -> bytes:
+        if not data:
+            return b""
+        try:
+            # Normalize padding
+            s = data.encode() if isinstance(data, str) else data
+            # Python's urlsafe_b64decode tolerates missing padding in most cases
+            return base64.urlsafe_b64decode(s + b"=" * (-len(s) % 4))
+        except Exception:
+            try:
+                return base64.b64decode(data)
+            except Exception:
+                return b""
+
+    def _extract_text_from_payload(self, payload: Dict[str, Any]) -> str:
+        # payload may contain 'body':{'data':...} or 'parts'
+        try:
+            # Direct body
+            body = payload.get("body", {})
+            if isinstance(body, dict):
+                data = body.get("data") or body.get("attachmentId")
+                if data:
+                    raw = self._safe_b64decode(data)
+                    try:
+                        return raw.decode("utf-8", errors="ignore")
+                    except Exception:
+                        return str(raw)
+
+            # Multipart
+            parts = payload.get("parts") or []
+            for p in parts:
+                mime = p.get("mimeType", "")
+                if mime.startswith("text/plain"):
+                    data = p.get("body", {}).get("data")
+                    if data:
+                        raw = self._safe_b64decode(data)
+                        try:
+                            return raw.decode("utf-8", errors="ignore")
+                        except Exception:
+                            return str(raw)
+                # fallback to first part
+                if p.get("body", {}).get("data"):
+                    raw = self._safe_b64decode(p.get("body", {}).get("data"))
+                    try:
+                        return raw.decode("utf-8", errors="ignore")
+                    except Exception:
+                        return str(raw)
+        except Exception:
+            pass
+        return ""
+
+    def _normalize_email_obj(self, obj: Dict[str, Any]) -> Dict[str, Any]:
+        """Normalize various email object shapes into a uniform dict with id, sender, subject, body."""
+        result = {"id": obj.get("id") or obj.get("message_id") or obj.get("threadId"),
+                  "subject": "", "sender": "", "body": ""}
+
+        # Prefer explicit raw_body if organizer provided it
+        if obj.get("raw_body"):
+            result["body"] = obj.get("raw_body")
+
+        # Try common header locations
+        payload = obj.get("payload") or obj
+        headers = payload.get("headers") if isinstance(payload, dict) else None
+        if headers:
+            if isinstance(headers, list):
+                for h in headers:
+                    name = (h.get("name") or "").lower()
+                    val = h.get("value") or ""
+                    if name == "subject":
+                        result["subject"] = result["subject"] or val
+                    if name in ("from", "sender"):
+                        result["sender"] = result["sender"] or val
+            elif isinstance(headers, dict):
+                result["subject"] = headers.get("Subject") or headers.get("subject") or result["subject"]
+                result["sender"] = headers.get("From") or headers.get("from") or result["sender"]
+
+        # If body not set yet, try payload-based extraction
+        if not result["body"]:
+            # If object has 'raw' RFC822 content
+            raw = obj.get("raw") or obj.get("raw_rfc822")
+            if raw:
+                try:
+                    if isinstance(raw, str):
+                        raw_bytes = self._safe_b64decode(raw)
+                    elif isinstance(raw, bytes):
+                        raw_bytes = raw
+                    else:
+                        raw_bytes = b""
+                    if raw_bytes:
+                        msg = email.message_from_bytes(raw_bytes, policy=policy.default)
+                        # prefer text/plain
+                        body_parts = []
+                        if msg.is_multipart():
+                            for part in msg.walk():
+                                ctype = part.get_content_type()
+                                if ctype == "text/plain":
+                                    body_parts.append(part.get_content())
+                        else:
+                            body_parts.append(msg.get_content())
+                        result["body"] = "\n\n".join([p for p in body_parts if p])[:2000]
+                        result["subject"] = result["subject"] or msg.get("Subject", "")
+                        result["sender"] = result["sender"] or msg.get("From", "")
+                except Exception:
+                    pass
+
+        if not result["body"] and isinstance(payload, dict):
+            result["body"] = self._extract_text_from_payload(payload) or result["body"]
+
+        # Fallbacks
+        result["body"] = result["body"] or (obj.get("snippet") or obj.get("summary") or "")
+        result["subject"] = result["subject"] or obj.get("subject") or ""
+        result["sender"] = result["sender"] or obj.get("sender") or obj.get("from") or ""
+
+        # Ensure strings
+        for k in ("subject", "sender", "body"):
+            if result.get(k) is None:
+                result[k] = ""
+        return result
+
+    async def fetch_email_batches_normalized(self, email_ids: List[str], batch_size: int = 10) -> List[List[Dict[str, Any]]]:
+        """Fetch emails in batches and normalize each email into {id,subject,sender,body}.
+
+        Gmail fetches remain protected by self._gmail_lock inside fetch_email, so this
+        is safe to call concurrently for classification workloads.
+        """
+        batches = [email_ids[i:i + batch_size] for i in range(0, len(email_ids), batch_size)]
+        results: List[List[Dict[str, Any]]] = []
+        for batch in batches:
+            # Fetch the raw objects (fetch_email serializes underlying Gmail calls)
+            fetch_tasks = [self.fetch_email(eid) for eid in batch]
+            fetched = await asyncio.gather(*fetch_tasks, return_exceptions=False)
+            normalized = []
+            for obj in fetched:
+                try:
+                    normalized.append(self._normalize_email_obj(obj if isinstance(obj, dict) else {}))
+                except Exception:
+                    normalized.append({"id": obj.get("id") if isinstance(obj, dict) else None, "subject": "", "sender": "", "body": ""})
+            results.append(normalized)
         return results
 
     # ----------------- Content extraction -----------------
@@ -156,15 +343,19 @@ class AsyncHighPerformanceGmailOrganizer(GmailAIOrganizer):
                 return await asyncio.to_thread(mgr.simple_chat, prompt)
 
             # fallback OpenAI
-            import openai
+            from openai import OpenAI
+            client = OpenAI()
             api_key = os.environ.get("OPENAI_API_KEY")
             if api_key:
-                openai.api_key = api_key
-                resp = await asyncio.to_thread(openai.ChatCompletion.create,
-                                               model=os.environ.get("OPENAI_MODEL", "gpt-3.5-turbo"),
-                                               messages=[{"role":"user","content":prompt}],
-                                               max_tokens=1024,
-                                               temperature=0.0)
+                client.api_key = api_key
+                resp = await asyncio.to_thread(
+                    client.chat.completions.create,
+                    model=os.environ.get("OPENAI_MODEL", "gpt-4o-mini"),
+                    messages=[{"role": "user", "content": prompt}],
+                    max_tokens=1024,
+                    temperature=0.0,
+                )       
+
                 return resp.choices[0].message.content
         except Exception:
             return None
@@ -258,9 +449,11 @@ class AsyncHighPerformanceGmailOrganizer(GmailAIOrganizer):
         """High-performance async reprocessing"""
         start_time = datetime.now()
         email_batches = [email_ids[i:i+batch_size] for i in range(0, len(email_ids), batch_size)]
-        fetched_batches = await self.fetch_email_batches(email_ids, batch_size)
+        # Use normalized fetcher so classification and labeling have consistent fields
+        fetched_batches = await self.fetch_email_batches_normalized(email_ids, batch_size)
         available_labels = available_labels or list(self.categories.keys())
 
+        # Classify using normalized objects (which expose 'body' and 'subject')
         classified_batches = await self.classify_batches(fetched_batches, available_labels)
         await self.apply_label_batches(fetched_batches, classified_batches)
 

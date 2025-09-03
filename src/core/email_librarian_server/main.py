@@ -12,7 +12,7 @@ from .storage_manager import StorageManager
 from .auth_manager import GmailAuthManager
 from .organizer_factory import OrganizerFactory
 from .job_manager import JobManager
-from .job_processors import ShelvingJobProcessor, CatalogingJobProcessor
+from .job_processors.job_processors import ShelvingJobProcessor, CatalogingJobProcessor
 from .server import EnhancedEmailLibrarianServer
 
 

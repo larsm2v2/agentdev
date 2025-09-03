@@ -23,24 +23,24 @@ services:
       - "googleapis.com:172.253.124.106"
       - "googleapis.com:172.253.124.104"
     environment:
-      - POSTGRES_HOST=postgres
-      - POSTGRES_PORT=5432
-      - POSTGRES_DB=email_librarian
-      - POSTGRES_USER=librarian_user
-      - POSTGRES_PASSWORD=secure_password_2024
-      - DATABASE_URL=postgresql+asyncpg://librarian_user:secure_password_2024@postgres:5432/email_librarian
-      - QDRANT_URL=http://qdrant:6333
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: email_librarian
+      POSTGRES_USER: librarian_user
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      DATABASE_URL: ${DATABASE_URL}
+      QDRANT_URL: http://qdrant:6333
       # These are the env names expected by src.core.email_librarian_server.storage_manager
-      - EMAIL_LIBRARIAN_DATABASE_URL=postgresql+asyncpg://librarian_user:secure_password_2024@postgres:5432/email_librarian
-      - EMAIL_LIBRARIAN_QDRANT_URL=http://qdrant:6333
-      - N8N_BASE_URL=http://n8n:5678
-      - REDIS_URL=redis://:redis_password_2024@redis:6379/0
-      - LANGFUSE_HOST=https://cloud.langfuse.com
-      - LOG_LEVEL=INFO
+      EMAIL_LIBRARIAN_DATABASE_URL: ${DATABASE_URL}
+      EMAIL_LIBRARIAN_QDRANT_URL: http://qdrant:6333
+      N8N_BASE_URL: http://n8n:5678
+      REDIS_URL: ${REDIS_URL}
+      LANGFUSE_HOST: https://cloud.langfuse.com
+      LOG_LEVEL: INFO
       # Gmail credentials paths (files mounted via volumes)
-      - GMAIL_CREDENTIALS_PATH=/app/config/credentials.json
-      - GMAIL_TOKEN_PATH=/app/data/gmail_token.pickle
-      - FRONTEND_MODE=static
+      GMAIL_CREDENTIALS_PATH: /app/config/credentials.json
+      GMAIL_TOKEN_PATH: /app/data/gmail_token.pickle
+      FRONTEND_MODE: static
     volumes:
       - ./config:/app/config:ro # Read-only for security
       - ./logs:/app/logs
@@ -73,7 +73,7 @@ services:
     environment:
       POSTGRES_DB: email_librarian
       POSTGRES_USER: librarian_user
-      POSTGRES_PASSWORD: secure_password_2024
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_HOST_AUTH_METHOD: md5
     ports:
       - "5432:5432"
@@ -115,21 +115,21 @@ services:
     ports:
       - "5678:5678"
     environment:
-      - DB_TYPE=postgresdb
-      - DB_POSTGRESDB_HOST=postgres
-      - DB_POSTGRESDB_PORT=5432
-      - DB_POSTGRESDB_DATABASE=n8n
-      - DB_POSTGRESDB_USER=librarian_user
-      - DB_POSTGRESDB_PASSWORD=secure_password_2024
-      - N8N_BASIC_AUTH_ACTIVE=true
-      - N8N_BASIC_AUTH_USER=admin
-      - N8N_BASIC_AUTH_PASSWORD=admin123
-      - WEBHOOK_URL=http://localhost:5678/
-      - GENERIC_TIMEZONE=UTC
-      - N8N_SECURE_COOKIE=false
-      - N8N_LOG_LEVEL=debug
-      - N8N_DEFAULT_BINARY_DATA_MODE=filesystem
-      - N8N_DIAGNOSTICS_ENABLED=false
+      DB_TYPE: postgresdb
+      DB_POSTGRESDB_HOST: postgres
+      DB_POSTGRESDB_PORT: 5432
+      DB_POSTGRESDB_DATABASE: n8n
+      DB_POSTGRESDB_USER: librarian_user
+      DB_POSTGRESDB_PASSWORD: ${POSTGRES_PASSWORD}
+      N8N_BASIC_AUTH_ACTIVE: "true"
+      N8N_BASIC_AUTH_USER: admin
+      N8N_BASIC_AUTH_PASSWORD: ${N8N_BASIC_AUTH_PASSWORD}
+      WEBHOOK_URL: http://localhost:5678/
+      GENERIC_TIMEZONE: UTC
+      N8N_SECURE_COOKIE: "false"
+      N8N_LOG_LEVEL: debug
+      N8N_DEFAULT_BINARY_DATA_MODE: filesystem
+      N8N_DIAGNOSTICS_ENABLED: "false"
     volumes:
       - n8n_data:/home/node/.n8n
       - ./n8n/workflows:/home/node/.n8n/workflows
@@ -162,7 +162,7 @@ services:
       - "6379:6379"
     volumes:
       - redis_data:/data
-    command: redis-server --appendonly yes --requirepass redis_password_2024
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD}
     healthcheck:
       test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
       interval: 10s
@@ -176,9 +176,9 @@ services:
     image: oliver006/redis_exporter:latest
     container_name: email_librarian_redis_exporter
     environment:
-      - REDIS_ADDR=redis://redis:6379
-      - REDIS_PASSWORD=redis_password_2024
-      - REDIS_EXPORTER_LOG_FORMAT=txt
+      REDIS_ADDR: redis://redis:6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      REDIS_EXPORTER_LOG_FORMAT: txt
     ports:
       - "9121:9121"
     depends_on:
@@ -216,9 +216,9 @@ services:
     ports:
       - "3000:3000"
     environment:
-      - GF_SECURITY_ADMIN_USER=admin
-      - GF_SECURITY_ADMIN_PASSWORD=admin123
-      - GF_USERS_ALLOW_SIGN_UP=false
+      GF_SECURITY_ADMIN_USER: ${GF_SECURITY_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GF_SECURITY_ADMIN_PASSWORD}
+      GF_USERS_ALLOW_SIGN_UP: "false"
     volumes:
       - grafana_data:/var/lib/grafana
       - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards

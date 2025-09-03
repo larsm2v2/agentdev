@@ -2,20 +2,23 @@ import asyncio
 import pytest
 import uuid
 from src.core.email_librarian_server.job_manager import JobManager
-from src.core.email_librarian_server.job_processors import CatalogingJobProcessor
-from src.core.email_librarian_server.organizer_factory import OrganizerStub
+from core.email_librarian_server.job_processors.job_processors import CatalogingJobProcessor
+from src.core.email_librarian_server.organizer_factory import OrganizerStub, OrganizerFactory
 
 
-class DummyStorage:
+from src.core.email_librarian_server.storage_manager import StorageManager
+
+class DummyStorage(StorageManager):
     def __init__(self):
+        super().__init__()
         self.database = None
 
 
-class MockOrganizerFactory:
+class MockOrganizerFactory(OrganizerFactory):
     def __init__(self):
         self.container_gmail_available = False
 
-    def create_organizer(self, organizer_type: str = "high_performance"):
+    def create_organizer(self, organizer_type: str = "high_performance", server=None):
         class M:
             async def search_emails(self, query=None, max_results=10):
                 return [

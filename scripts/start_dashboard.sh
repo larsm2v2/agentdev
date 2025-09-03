@@ -107,7 +107,7 @@ echo "   5. View recent job activity and system health"
 echo ""
 echo "✅ Integrated system is ready for email processing!"
 
-# Optional: Show resource usage
 echo ""
+
 echo "💻 Current Resource Usage:"
 docker stats --no-stream --format "table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.NetIO}}" | head -10

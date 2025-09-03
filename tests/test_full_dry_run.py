@@ -1,7 +1,7 @@
 import asyncio
 from pathlib import Path
 from src.core.email_librarian_server.organizer_factory import OrganizerFactory
-from src.core.email_librarian_server.job_processors import CatalogingJobProcessor, ShelvingJobProcessor
+from core.email_librarian_server.job_processors.job_processors import CatalogingJobProcessor, ShelvingJobProcessor
 
 async def main():
     token_file = Path("data/gmail_token.pickle").resolve()
