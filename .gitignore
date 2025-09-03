@@ -84,6 +84,12 @@ ENV/
 .venv/
 .env/
 
+# Archive folder for cleaned top-level files
+archive_top_level_2025-09-03/
+
+# Sensitive persisted tokens
+gmail_token.pickle
+
 # Distribution / packaging
 build/
 develop-eggs/
